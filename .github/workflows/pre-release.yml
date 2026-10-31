@@ -139,3 +139,33 @@ jobs:
               "https://api.github.com/repos/${{ github.repository }}/contents/ci-logs/$NAME" \
               -d @/tmp/body.json > /dev/null
           done
+
+      - name: Prune old pre-releases
+        if: steps.apkbuild.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.apk.outputs.tag }}
+        run: |
+          # 只保留最新一个预发行：按创建时间倒序，保留第一条（刚发布的），其余连同 tag 一起删除
+          gh release list --repo ${{ github.repository }} --limit 100 \
+            --json tagName,isPrerelease,createdAt \
+            --jq --arg cur "$CURRENT" \
+              '.[] | select(.isPrerelease) | select(.tagName != $cur) | "\(.createdAt)\t\(.tagName)"' \
+            | sort -r > /tmp/old.txt
+
+          if [ ! -s /tmp/old.txt ]; then
+            echo "没有其他预发行，无需清理"
+            exit 0
+          fi
+
+          echo "待删除的旧预发行："
+          cat /tmp/old.txt
+
+          while IFS=$'\t' read -r _ tag; do
+            [ -z "$tag" ] && continue
+            echo "删除：$tag"
+            gh release delete "$tag" --repo ${{ github.repository }} --yes --cleanup-tag \
+              || echo "删除失败（跳过）：$tag"
+          done < /tmp/old.txt
+
+          echo "保留：$CURRENT"
