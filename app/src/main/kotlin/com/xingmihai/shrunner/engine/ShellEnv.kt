@@ -367,7 +367,9 @@ object ShellEnv {
     /** 首行 shebang 无效时替换；其余字节原样保留。 */
     private fun fixShebang(bytes: ByteArray): ByteArray {
         val firstLineEnd = bytes.indexOf(0x0A.toByte())
-        if (!bytes.startsWith(byteArrayOf(0x23, 0x21))) return bytes   // 不以 #! 开头，不动
+        if (!(bytes.size >= 2 && bytes[0] == 0x23.toByte() && bytes[1] == 0x21.toByte())) {
+            return bytes   // 不以 #! 开头，原样不动
+        }
         val end = if (firstLineEnd < 0) bytes.size else firstLineEnd
         val shebang = String(bytes, 0, end, Charsets.UTF_8).trim()
         val interp = shebang.removePrefix("#!").trim()
@@ -379,7 +381,9 @@ object ShellEnv {
     }
 
     private fun readShebang(bytes: ByteArray): String {
-        if (!bytes.startsWith(byteArrayOf(0x23, 0x21))) return "无 shebang"
+        if (!(bytes.size >= 2 && bytes[0] == 0x23.toByte() && bytes[1] == 0x21.toByte())) {
+            return "无 shebang"
+        }
         val end = bytes.indexOf(0x0A.toByte()).let { if (it < 0) bytes.size.coerceAtMost(60) else it }
         return String(bytes, 0, end, Charsets.UTF_8).trim().take(60)
     }

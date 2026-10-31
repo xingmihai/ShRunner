@@ -141,9 +141,9 @@ object ShellEngine {
                     lastExit = code
                     succeeded = code == 0
                     if (!succeeded) {
-                        // 整条执行也异常，最后再试逐条
+                        // 整条执行也异常，最后再试逐条（二进制脚本跳过，逐行会破坏结构）
                         val report = ShellEnv.inspectStaged(staged, File(request.scriptPath))
-                        if (report.isBinary) {
+                        val lineCode = if (report.isBinary) {
                             appendSystem("[ShRunner] 脚本含二进制数据，跳过逐行执行（会破坏结构）")
                             null
                         } else {
