@@ -41,7 +41,7 @@ object ShellEnv {
         SU_C_DIRECT("su -c \"脚本\""),
 
         /** `su -c sh 脚本`（不带引号），专治把引号一起吃进去的 su */
-        SU_C_SH_PLAIN("su -c "sh 脚本"（无引号）"),
+        SU_C_SH_PLAIN("su -c sh 脚本（无引号）"),
 
         /** `su -s sh -c "script args"` —— 显式指定 shell */
         SU_S_C("su -s sh -c \"脚本\""),
