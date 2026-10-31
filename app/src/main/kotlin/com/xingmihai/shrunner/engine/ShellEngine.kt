@@ -229,48 +229,39 @@ object ShellEngine {
                 // 优先套 PTY：真终端下脚本才会阻塞等输入，手动/自动应答都能送达。
                 // 没有 PTY 时退化为 printf 管道预填（尽力而为，部分脚本仍会取消）。
                 val pty = ShellEnv.ptyCommand()
-                val wrapped = ShellEnv.wrapPty(plain, pty)
-                val command = when {
-                    wrapped != null -> {
-                        appendSystem("已分配伪终端（${pty?.substringAfterLast('/')}），脚本可正常等待输入")
-                        wrapped
-                    }
-                    request.autoAnswers.isNotEmpty() -> {
-                        appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+
+                // PTY 下脚本会真正阻塞等待，因此必须同时把答案送进去，
+                // 否则它就一直等到超时。没配答案时不做 PTY，让它快速走完并提示用户去配。
+                val command = if (pty != null && request.autoAnswers.isNotEmpty()) {
+                    val wrapped = ShellEnv.wrapPty(plain, pty)
+                    if (wrapped != null) {
+                        appendSystem("已分配伪终端（${pty.substringAfterLast('/')}），脚本可正常等待输入")
                         val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
+                        appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+                        "printf '%s\\n' $printfArgs | $wrapped"
+                    } else {
+                        val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
+                        appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
                         "printf '%s\\n' $printfArgs | $plain"
                     }
-                    else -> plain
+                } else if (pty != null) {
+                    // 有 PTY 但没答案：不做 PTY，避免脚本无限等待
+                    plain
+                } else if (request.autoAnswers.isNotEmpty()) {
+                    appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+                    val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
+                    "printf '%s\\n' $printfArgs | $plain"
+                } else {
+                    plain
                 }
 
-                // PTY 下脚本会等着读，识别到提问再应答即可；没有 PTY 时才需要预填
-                if (wrapped != null && request.autoAnswers.isNotEmpty()) {
-                    val queue = ConcurrentLinkedQueue(request.autoAnswers)
-                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
-                    val lastText = java.util.concurrent.atomic.AtomicReference("")
-                    val lastChangeAt = java.util.concurrent.atomic.AtomicLong(0L)
-                    val answered = java.util.concurrent.atomic.AtomicReference("")
-                    answerWatcher = { text ->
-                        val now = System.currentTimeMillis()
-                        if (text != lastText.get()) {
-                            lastText.set(text)
-                            lastChangeAt.set(now)
-                        } else if (now - lastChangeAt.get() >= 300 && answered.get() != text) {
-                            val answer = queue.peek()
-                            if (promptKind(text) != null && answer != null) {
-                                answered.set(text)
-                                queue.poll()
-                                if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
-                            }
-                        }
-                    }
-                } else if (wrapped == null && request.autoAnswers.isEmpty()) {
+                if (request.autoAnswers.isEmpty()) {
                     val hinted = java.util.concurrent.atomic.AtomicBoolean(false)
                     answerWatcher = { text ->
                         if (!hinted.get() && text.isNotBlank() && promptKind(text) != null) {
                             hinted.set(true)
-                            appendSystem("脚本在等输入：本设备没有 script 命令，无法分配伪终端，管道输入它读不到")
-                            appendSystem("建议改用自动应答（脚本页 → 齿轮），或安装 busybox 后重试")
+                            appendSystem("脚本在等输入，但没配置自动应答。这类脚本读取极快，手动输入通常来不及")
+                            appendSystem("请到「脚本页 → 齿轮 → 自动应答」填答案后重跑，输出页顶部也有「应答设置」")
                         }
                     }
                 }
