@@ -5,11 +5,21 @@ plugins {
 }
 
 // 签名配置：优先读 local.properties（不入库），读不到再退回环境变量（CI 用）
-val keystoreProps = rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
-    java.util.Properties().apply { f.inputStream().use { load(it) } }
-}
+// 这里手写解析，避免 Kotlin DSL 里 java.* 与插件访问器重名导致的解析歧义
+val keystoreProps: Map<String, String> = rootProject.file("local.properties")
+    .takeIf { it.exists() }
+    ?.readLines(Charsets.UTF_8)
+    ?.mapNotNull { line ->
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("#")) return@mapNotNull null
+        val idx = trimmed.indexOf('=')
+        if (idx <= 0) null else trimmed.substring(0, idx).trim() to trimmed.substring(idx + 1).trim()
+    }
+    ?.toMap()
+    ?: emptyMap()
+
 fun signingValue(key: String): String? =
-    keystoreProps?.getProperty(key)?.takeIf { it.isNotBlank() } ?: System.getenv(key)?.takeIf { it.isNotBlank() }
+    keystoreProps[key]?.takeIf { it.isNotBlank() } ?: System.getenv(key)?.takeIf { it.isNotBlank() }
 
 val keystoreFile = signingValue("KEYSTORE_FILE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
 val keystorePassword = signingValue("KEYSTORE_PASSWORD")
