@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -43,13 +44,14 @@ import com.xingmihai.shrunner.ui.theme.ShRunnerTheme
 import com.xingmihai.shrunner.util.DangerScan
 import com.xingmihai.shrunner.util.displayNameOf
 
-enum class ShTab(val label: String) { SCRIPTS("脚本"), EDITOR("编辑"), CONSOLE("输出") }
+enum class ShTab(val label: String) { SCRIPTS("脚本"), EDITOR("编辑"), CONSOLE("输出"), ENV("环境") }
 
 @Composable
 fun ShRunnerRoot(initialScriptId: String? = null) {
     val context = LocalContext.current
     val app = context.applicationContext as Application
     val repo = remember { ScriptRepository.get(app) }
+    val runPrefs = remember { com.xingmihai.shrunner.data.RunPrefs.get(context) }
     val listVm: ScriptListViewModel = viewModel()
     val editorVm: EditorViewModel = viewModel()
 
@@ -77,7 +79,8 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                 scriptName = entry.name,
                 scriptPath = entry.file.absolutePath,
                 workDir = repo.directory().absolutePath,
-                useRoot = useRoot
+                useRoot = useRoot,
+                env = runPrefs.resolveEnv()
             )
         )
         tab = ShTab.CONSOLE
@@ -143,6 +146,7 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                                         ShTab.SCRIPTS -> Icons.Default.Description
                                         ShTab.EDITOR -> Icons.Default.Edit
                                         ShTab.CONSOLE -> Icons.Default.Code
+                                        ShTab.ENV -> Icons.Default.Tune
                                     },
                                     contentDescription = item.label
                                 )
@@ -176,6 +180,9 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                         scriptId = editingId,
                         onSaved = { id -> editingId = id; listVm.refresh() },
                         onRun = { id -> repo.find(id)?.let { requestRun(it) } }
+                    )
+                    ShTab.ENV -> com.xingmihai.shrunner.ui.screens.EnvScreen(
+                        prefs = remember { com.xingmihai.shrunner.data.RunPrefs.get(context) }
                     )
                     ShTab.CONSOLE -> ConsoleScreen(
                         useRoot = useRoot,

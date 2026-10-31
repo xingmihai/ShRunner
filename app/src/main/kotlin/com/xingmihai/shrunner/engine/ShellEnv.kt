@@ -112,9 +112,43 @@ object ShellEnv {
     fun toolboxSummary(): String = toolboxPath() ?: "无（命令集以系统 toybox 为准）"
 
     fun defaultPath(): String {
-        val base = "/system/bin:/system/xbin:/vendor/bin:/sbin:/sbin/bin:/product/bin:/apex/com.android.runtime/bin"
+        val base = listOf(
+            "/system/bin", "/system/xbin", "/vendor/bin", "/sbin", "/sbin/bin",
+            "/product/bin", "/apex/com.android.runtime/bin", "/apex/com.android.art/bin",
+            "/odm/bin", "/system_ext/bin"
+        ).joinToString(":")
         val extra = listOfNotNull(toolboxPath()).joinToString(":") { File(it).parent ?: "" }
         return if (extra.isBlank()) base else "$base:$extra"
+    }
+
+    /** 执行脚本时的基础环境。缺了这些，脚本里的原生程序容易取不到值而崩溃。 */
+    fun baseEnv(): Map<String, String> {
+        val env = linkedMapOf<String, String>()
+        env["PATH"] = defaultPath()
+        env["HOME"] = "/data/local/tmp"
+        env["TMPDIR"] = "/data/local/tmp"
+        env["TEMP"] = "/data/local/tmp"
+        env["TMP"] = "/data/local/tmp"
+        env["TERM"] = "xterm-256color"
+        env["SHELL"] = shellPath()
+        env["USER"] = "root"
+        env["LOGNAME"] = "root"
+        env["LANG"] = "C.UTF-8"
+        env["LC_ALL"] = "C.UTF-8"
+        env["PWD"] = "/"
+        env["ANDROID_DATA"] = "/data"
+        env["ANDROID_ROOT"] = "/system"
+        env["ANDROID_STORAGE"] = "/storage"
+        env["EXTERNAL_STORAGE"] = "/sdcard"
+        env["LD_LIBRARY_PATH"] = listOf(
+            "/system/lib64", "/vendor/lib64", "/apex/com.android.runtime/lib64"
+        ).joinToString(":")
+        return env
+    }
+
+    /** 把基础环境写成 shell 的 export 语句，供持久 root shell 首行执行。 */
+    fun envPrologue(): String = baseEnv().entries.joinToString(" ") { (k, v) ->
+        "export $k=" + singleQuote(v)
     }
 
     /**

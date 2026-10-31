@@ -240,6 +240,17 @@ object ShellEngine {
         appendSystem("[ShRunner] 启用持久 root shell：${session.info()}，在 shell 内执行脚本")
         currentSession = session
         return try {
+            // 先建立完整执行环境（PATH / TMPDIR / LD_LIBRARY_PATH 等），
+            // 缺这些变量时脚本里的原生程序常常取不到值直接崩溃
+            session.exec(ShellEnv.envPrologue(), 8000) { line ->
+                if (line.isNotBlank()) append(line, Stream.SYSTEM)
+            }
+            request.env.filterKeys { it != "PATH" }.takeIf { it.isNotEmpty() }?.let { extra ->
+                session.exec(
+                    extra.entries.joinToString(" ") { (k, v) -> "export $k=" + ShellEnv.singleQuote(v) },
+                    8000
+                )
+            }
             val command = buildList {
                 add(shell)
                 add(ShellEnv.singleQuote(scriptPath))
@@ -375,9 +386,8 @@ object ShellEngine {
         // 合并 stderr 到 stdout，避免双流读取造成的管道阻塞
         builder.redirectErrorStream(true)
         val env = builder.environment()
-        env["PATH"] = ShellEnv.defaultPath()
-        env["HOME"] = request.workDir ?: "/data/local/tmp"
-        env["TERM"] = "xterm-256color"
+        ShellEnv.baseEnv().forEach { (k, v) -> env[k] = v }
+        request.workDir?.let { env["HOME"] = it }
         request.env.forEach { (k, v) -> env[k] = v }
 
         val process = builder.start()
