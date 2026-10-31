@@ -212,18 +212,38 @@ object ShellEngine {
                 }
                 request.workDir?.let { session.exec("cd " + ShellEnv.singleQuote(it), 8000) }
 
-                // 预填输入：把答案一次性塞进管道再启动脚本。
-                // 不能用「看到提问再回答」，脚本往往在我们写入前就读了，拿到 EOF 直接判定为取消，
-                // 迟到的答案还会被 shell 当成命令执行（y: not found）。
-                val command = buildScriptCommand(shell, scriptPath, request.args, request.autoAnswers)
-                if (request.autoAnswers.isNotEmpty()) {
-                    appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+                // 持久会话下 stdin 一直保持打开，脚本 read 会阻塞而不是读到 EOF，
+                // 因此可以在识别到提问后再写入，不存在竞态。
+                val command = buildList {
+                    add(shell)
+                    add(ShellEnv.singleQuote(scriptPath))
+                    request.args.forEach { add(ShellEnv.singleQuote(it)) }
+                }.joinToString(" ")
+
+                val queue = ConcurrentLinkedQueue(request.autoAnswers)
+                if (queue.isNotEmpty()) {
+                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
+                }
+                answerWatcher = { text ->
+                    val answer = queue.peek()
+                    if (answer != null && looksLikePrompt(text)) {
+                        queue.poll()
+                        if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
+                    }
                 }
 
                 val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
-                val code = session.exec(command, timeout) { line ->
-                    if (line.isNotEmpty()) append(line, Stream.STDOUT)
-                }
+                val code = session.exec(
+                    command = command,
+                    timeoutMs = timeout,
+                    onLine = { line ->
+                        if (line.isNotEmpty()) {
+                            append(line, Stream.STDOUT)
+                            answerWatcher?.invoke(line)
+                        }
+                    },
+                    onPartial = { text -> answerWatcher?.invoke(text) }
+                )
                 val exit = code ?: return EXIT_TIMEOUT to false
                 exit to (exit == 0)
             } finally {
@@ -353,7 +373,8 @@ object ShellEngine {
             Regex("""\[\d+\s*/\s*\d+\].*[:：]\s*$"""),
             Regex("""[:：]\s*$"""),
             Regex("""\?\s*$"""),
-            Regex("""\(y/n\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
+            Regex("""\(y/n\)|\(Y/N\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
+            Regex("""(y|Y)(或者|或)/(n|N)"""),
             Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose""")
         )
         return patterns.any { it.containsMatchIn(text) }

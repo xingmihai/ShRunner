@@ -31,6 +31,10 @@ class RootSession private constructor(
     @Volatile
     private var onLine: ((String) -> Unit)? = null
 
+    /** 未成行的部分输出回调：脚本提问常不带换行，靠它才能及时识别。 */
+    @Volatile
+    private var onPartial: ((String) -> Unit)? = null
+
     @Volatile
     private var currentDeferred: CompletableDeferred<Int>? = null
 
@@ -43,21 +47,21 @@ class RootSession private constructor(
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching {
                 process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                    val buf = StringBuilder()
+                    val chars = CharArray(1)
                     while (alive) {
-                        val line = reader.readLine() ?: break
-                        val marker = currentMarker
-                        if (marker != null && line.contains(marker)) {
-                            val code = line.substringAfter(marker).trim()
-                                .removePrefix("_").toIntOrNull() ?: 0
-                            val deferred = currentDeferred
-                            val callback = onLine
-                            currentMarker = null
-                            currentDeferred = null
-                            onLine = null
-                            callback?.invoke("")
-                            deferred?.complete(code)
+                        val n = reader.read(chars)
+                        if (n <= 0) break
+                        val ch = chars[0]
+                        if (ch == '\n') {
+                            val line = buf.toString()
+                            buf.setLength(0)
+                            emitLine(line)
                         } else {
-                            onLine?.invoke(line)
+                            buf.append(ch)
+                            // 未成行的部分也要回调，否则「是否继续执行? (y/n)」这类
+                            // 不带换行的提问永远识别不到，脚本会一直等到超时
+                            onPartial?.invoke(buf.toString())
                         }
                     }
                 }
@@ -65,11 +69,27 @@ class RootSession private constructor(
         }
     }
 
-    /** 执行一条命令，输出经 onLine 实时回调，返回退出码；超时返回 null。 */
+    private fun emitLine(line: String) {
+        val marker = currentMarker
+        if (marker != null && line.contains(marker)) {
+            val code = line.substringAfter(marker).trim().removePrefix("_").toIntOrNull() ?: 0
+            val deferred = currentDeferred
+            val callback = onLine
+            currentMarker = null
+            currentDeferred = null
+            onLine = null
+            callback?.invoke("")
+            deferred?.complete(code)
+        } else {
+            onLine?.invoke(line)
+        }
+    }
+
     suspend fun exec(
         command: String,
         timeoutMs: Long = 60_000,
-        onLine: (String) -> Unit = {}
+        onLine: (String) -> Unit = {},
+        onPartial: (String) -> Unit = {}
     ): Int? {
         if (!alive) return null
         val marker = "SHRUNNER_${seq.incrementAndGet()}_MARKER"
@@ -77,6 +97,7 @@ class RootSession private constructor(
         currentMarker = marker
         currentDeferred = deferred
         this.onLine = onLine
+        this.onPartial = onPartial
         return try {
             runCatching {
                 writer.write(command)
@@ -89,6 +110,7 @@ class RootSession private constructor(
             currentMarker = null
             currentDeferred = null
             this.onLine = null
+            this.onPartial = null
         }
     }
 
