@@ -11,6 +11,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
 enum class Stream { STDOUT, STDERR, SYSTEM }
@@ -225,27 +226,51 @@ object ShellEngine {
                     request.args.forEach { add(ShellEnv.singleQuote(it)) }
                 }.joinToString(" ")
 
-                // 两种模式二选一：
-                // · 配了自动应答 → printf 管道预填，脚本每一次 read 依次取到，全程无人值守。
-                //   （已验证脚本确实能从管道读到值；答案为空时脚本才会判定为取消）
-                // · 没配 → 直接执行，stdin 就是会话输入，可用输出页底部的输入框手动回答。
-                val command = if (request.autoAnswers.isNotEmpty()) {
-                    appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
-                    val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
-                    "printf '%s\\n' $printfArgs | $plain"
-                } else {
-                    plain
+                // 优先套 PTY：真终端下脚本才会阻塞等输入，手动/自动应答都能送达。
+                // 没有 PTY 时退化为 printf 管道预填（尽力而为，部分脚本仍会取消）。
+                val pty = ShellEnv.ptyCommand()
+                val wrapped = ShellEnv.wrapPty(plain, pty)
+                val command = when {
+                    wrapped != null -> {
+                        appendSystem("已分配伪终端（${pty?.substringAfterLast('/')}），脚本可正常等待输入")
+                        wrapped
+                    }
+                    request.autoAnswers.isNotEmpty() -> {
+                        appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+                        val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
+                        "printf '%s\\n' $printfArgs | $plain"
+                    }
+                    else -> plain
                 }
 
-                if (request.autoAnswers.isEmpty()) {
-                    // 没配自动应答时只做提示：这类脚本提问后立刻读输入，
-                    // 手动输入几乎来不及，提示用户去配自动应答后重跑
+                // PTY 下脚本会等着读，识别到提问再应答即可；没有 PTY 时才需要预填
+                if (wrapped != null && request.autoAnswers.isNotEmpty()) {
+                    val queue = ConcurrentLinkedQueue(request.autoAnswers)
+                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
+                    val lastText = java.util.concurrent.atomic.AtomicReference("")
+                    val lastChangeAt = java.util.concurrent.atomic.AtomicLong(0L)
+                    val answered = java.util.concurrent.atomic.AtomicReference("")
+                    answerWatcher = { text ->
+                        val now = System.currentTimeMillis()
+                        if (text != lastText.get()) {
+                            lastText.set(text)
+                            lastChangeAt.set(now)
+                        } else if (now - lastChangeAt.get() >= 300 && answered.get() != text) {
+                            val answer = queue.peek()
+                            if (promptKind(text) != null && answer != null) {
+                                answered.set(text)
+                                queue.poll()
+                                if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
+                            }
+                        }
+                    }
+                } else if (wrapped == null && request.autoAnswers.isEmpty()) {
                     val hinted = java.util.concurrent.atomic.AtomicBoolean(false)
                     answerWatcher = { text ->
                         if (!hinted.get() && text.isNotBlank() && promptKind(text) != null) {
                             hinted.set(true)
-                            appendSystem("脚本正在等输入，但没配置自动应答。这类脚本读取极快，手动输入通常来不及")
-                            appendSystem("请到「脚本页 → 齿轮 → 自动应答」填答案后重跑")
+                            appendSystem("脚本在等输入：本设备没有 script 命令，无法分配伪终端，管道输入它读不到")
+                            appendSystem("建议改用自动应答（脚本页 → 齿轮），或安装 busybox 后重试")
                         }
                     }
                 }

@@ -189,9 +189,51 @@ object ShellEnv {
         }
     }
 
-    /** 是否可用 pty（script 命令存在）。部分脚本只接受终端输入，管道喂进去它不认。 */
-    fun hasPty(): Boolean = listOf("/system/bin/script", "/system/xbin/script", "/usr/bin/script")
-        .any { File(it).exists() }
+    /**
+     * 查找能给脚本分配伪终端（PTY）的命令。
+     *
+     * 很多交互脚本只在真终端下才阻塞等输入：给它管道的话 read 立刻失败，
+     * 拿到空值就按「非 y」处理，直接输出「操作已取消」。
+     * 终端类 App（如 MT 管理器）能跑通，正是因为它们有 PTY。
+     *
+     * 这里用 shell 的 `command -v` 全 PATH 探测，比写死几个路径可靠。
+     */
+    fun ptyCommand(force: Boolean = false): String? {
+        if (!force) cachedPty?.let { return it }
+        cachedPty = findPtyCommand()
+        return cachedPty
+    }
+
+    @Volatile
+    private var cachedPty: String? = null
+
+    private fun findPtyCommand(): String? {
+        val probe = listOf(
+            shellPath(), "-c",
+            "command -v script; command -v unbuffer; command -v expect; " +
+                "command -v socat; command -v python3; command -v python"
+        )
+        val out = runShort(probe, 6).first
+        val first = out.lineSequence().map { it.trim() }.firstOrNull { it.startsWith("/") }
+        if (first != null) return first
+
+        // 兜底：busybox / toybox 以 applet 形式提供
+        for (box in listOfNotNull(toolboxPath())) {
+            val listed = runShort(listOf(box, "--list"), 6).first
+            if (listed.lineSequence().any { it.trim() == "script" }) return "$box script"
+        }
+        return null
+    }
+
+    /** 用 PTY 包装一条命令；返回 null 表示没有可用工具。 */
+    fun wrapPty(command: String, pty: String?): String? {
+        val tool = pty ?: return null
+        return when {
+            tool.endsWith("script") -> "$tool -q -e -c " + singleQuote(command) + " /dev/null"
+            tool.endsWith("unbuffer") -> "$tool $command"
+            else -> null
+        }
+    }
 
     /** 该脚本对应的暂存目录，即被执行副本所在位置。 */
     fun stageDirOf(source: File): File =

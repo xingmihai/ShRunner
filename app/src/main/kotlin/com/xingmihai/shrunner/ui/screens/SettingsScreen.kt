@@ -133,6 +133,10 @@ fun SettingsScreen(
             InfoLine("shell", ShellEnv.shellPath())
             InfoLine("root", if (probe?.ok == true) "可用 · ${probe.mode?.label}" else (probe?.detail ?: "未探测"))
             InfoLine("工具箱", ShellEnv.toolboxSummary())
+            InfoLine(
+                "伪终端",
+                ShellEnv.ptyCommand()?.let { "可用（$it）" } ?: "不可用：交互式脚本可能读不到输入"
+            )
             OutlinedButton(onClick = onReprobe) { Text("重新探测") }
 
             HorizontalDivider()
