@@ -110,9 +110,14 @@ object ShellEngine {
                 }
                 val result = execute(request, plan)
                 lastExit = result.first
-                if (lastExit != 127 && !result.second) {
+                val noOutput = result.third <= 1     // 只回了一行（多半是报错本身）
+                val looksBroken = result.second || noOutput
+                if (lastExit == 0 || (lastExit != 127 && !looksBroken)) {
                     succeeded = true
                     break
+                }
+                if (looksBroken) {
+                    appendSystem("[ShRunner] 判定该方式未真正执行（输出 ${result.third} 行），继续尝试")
                 }
             }
 
@@ -137,17 +142,24 @@ object ShellEngine {
         }
     }
 
-    /** 返回 (退出码, 输出中是否出现 su 解码类错误)。 */
-    private suspend fun execute(request: RunRequest, plan: ShellEnv.CommandPlan): Pair<Int, Boolean> {
+    /** 返回 (退出码, 是否出现解码类错误, 输出行数)。 */
+    private suspend fun execute(
+        request: RunRequest,
+        plan: ShellEnv.CommandPlan
+    ): Triple<Int, Boolean, Int> {
         appendSystem("[ShRunner] 实际命令：" + plan.display)
         val process = startProcess(request, plan)
         currentProcess = process
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
         var sawDecodeError = false
+        var lines = 0
         val finished = withTimeoutOrNull(effectiveTimeout(request)) {
             while (true) {
                 val line = reader.readLine() ?: break
-                if (line.contains("decompress", true) || line.contains("not gzip", true)) {
+                lines++
+                if (line.contains("decompress", true) || line.contains("not gzip", true) ||
+                    line.contains("No such file or directory", true)
+                ) {
                     sawDecodeError = true
                 }
                 append(line, Stream.STDOUT)
@@ -157,9 +169,9 @@ object ShellEngine {
         if (finished == null) {
             process.destroy()
             appendSystem("[ShRunner] 执行超时（${request.timeoutMs} ms），已终止进程")
-            return EXIT_TIMEOUT to sawDecodeError
+            return Triple(EXIT_TIMEOUT, sawDecodeError, lines)
         }
-        return finished to sawDecodeError
+        return Triple(finished, sawDecodeError, lines)
     }
 
     /**
@@ -223,12 +235,22 @@ object ShellEngine {
             return listOf(plain)
         }
 
-        val modes = mutableListOf<ShellEnv.SuMode>()
-        probe.mode?.let { modes += it }
+        // 优先尝试 gzip 传入：这个 su 明确要求 -c 参数是可解压文件
+        val modes = mutableListOf(ShellEnv.SuMode.SU_C_GZIP)
+        probe.mode?.let { if (it !in modes) modes += it }
         ShellEnv.preferredMode?.let { if (it !in modes) modes += it }
         ShellEnv.SuMode.entries.forEach { if (it !in modes) modes += it }
 
-        return modes.map { ShellEnv.buildCommand(it, su, shell, scriptPath, request.args) } + plain
+        // 预先生成 gzip 版本（失败则该模式自动跳过）
+        val gzPath = ShellEnv.gzip(File(scriptPath))?.let { ShellEnv.canonical(it) }
+        if (gzPath != null) {
+            appendSystem("[ShRunner] 已生成压缩副本（${File(gzPath).length() / 1024} KB）：$gzPath")
+        }
+
+        return modes.mapNotNull { mode ->
+            val path = if (mode == ShellEnv.SuMode.SU_C_GZIP) gzPath ?: return@mapNotNull null else scriptPath
+            ShellEnv.buildCommand(mode, su, shell, path, request.args)
+        } + plain
     }
 
     private fun effectiveTimeout(request: RunRequest): Long =

@@ -33,6 +33,13 @@ object ShellEnv {
      * 因此提供多种形式，自动探测出能真正跑通脚本的那一种。
      */
     enum class SuMode(val label: String) {
+        /**
+         * `su -c "脚本.gz"` —— 针对会把参数当压缩包解压再执行的 su。
+         * 这类 su 遇到明文脚本会报 `gzip: not gzip / Cannot decompress`，
+         * 那就直接给它 gzip 格式。
+         */
+        SU_C_GZIP("su -c \"脚本.gz\"（压缩传入，推荐）"),
+
         /** `su -c "sh script args"` —— 最常见 */
         SU_C_SH("su -c \"sh 脚本\""),
 
@@ -170,6 +177,10 @@ object ShellEnv {
         val quotedScript = singleQuote(scriptPath)
         val quotedArgs = args.joinToString(" ") { singleQuote(it) }
         return when (mode) {
+            SuMode.SU_C_GZIP -> {
+                val payload = quotedScript + quotedArgs
+                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
+            }
             SuMode.SU_C_SH -> {
                 val payload = "$shell $quotedScript$quotedArgs"
                 CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
@@ -321,6 +332,20 @@ object ShellEnv {
         runCatching { target.setReadable(true, false) }
         return target
     }
+
+    /**
+     * 把脚本压缩为 gzip 版本，供「先解压再执行」的 su 使用。
+     * 这类 su 要求 -c 传入的文件是 gzip 格式，明文脚本会报 Cannot decompress。
+     */
+    fun gzip(source: File): File? = runCatching {
+        val dir = ensureStageDir() ?: source.parentFile ?: return null
+        val target = File(dir, source.nameWithoutExtension + ".sh.gz")
+        java.util.zip.GZIPOutputStream(target.outputStream()).use { gz ->
+            source.inputStream().use { it.copyTo(gz) }
+        }
+        target.setReadable(true, false)
+        target
+    }.getOrNull()
 
     /** 取规范绝对路径，把 /data/user/0/... 归一为 /data/data/... */
     fun canonical(file: File): String =
