@@ -88,7 +88,7 @@ object ShellEngine {
             if (scriptPath != ShellEnv.canonical(File(request.scriptPath))) {
                 appendSystem("[ShRunner] 已暂存到：$scriptPath")
             }
-            appendSystem(describeScript(staged))
+            appendSystem(describeScript(staged, File(request.scriptPath)))
 
             if (request.useRoot) {
                 val probe = ShellEnv.probeRoot()
@@ -142,7 +142,13 @@ object ShellEngine {
                     succeeded = code == 0
                     if (!succeeded) {
                         // 整条执行也异常，最后再试逐条
-                        val lineCode = runLineByLine(request, staged)
+                        val report = ShellEnv.inspectStaged(staged, File(request.scriptPath))
+                        if (report.isBinary) {
+                            appendSystem("[ShRunner] 脚本含二进制数据，跳过逐行执行（会破坏结构）")
+                            null
+                        } else {
+                            runLineByLine(request, staged)
+                        }
                         if (lineCode != null) {
                             lastExit = lineCode
                             succeeded = lineCode == 0
@@ -247,13 +253,13 @@ object ShellEngine {
         }
     }
 
-    /** 脚本体检：大小、换行、首行 shebang，快速判断是不是脚本自身的问题。 */
-    private fun describeScript(file: File): String {
-        val text = runCatching { file.readText() }.getOrNull() ?: return "[ShRunner] 无法读取脚本"
-        val size = file.length()
-        val crlf = text.contains("\r\n")
-        val first = text.lineSequence().firstOrNull()?.take(40).orEmpty()
-        return "[ShRunner] 脚本体检：${size} 字节 · ${if (crlf) "CRLF 换行" else "LF 换行"} · 首行「$first」"
+    /** 脚本体检：全部按字节处理，避免破坏内嵌的二进制数据。 */
+    private fun describeScript(staged: File, original: File): String {
+        val report = ShellEnv.inspectStaged(staged, original)
+        val mb = "%.1fMB".format(report.sizeBytes / 1048576.0)
+        val integrity = if (report.sameSize) "字节数一致（内容未改动）" else "⚠ 字节数与原文件不同"
+        return "[ShRunner] 脚本体检：$mb · ${if (report.isBinary) "含二进制数据" else "纯文本"} · " +
+            "shebang「${report.shebang}」 · $integrity"
     }
 
     /** 候选执行方案：首选探测通过的，其余作为失败回退。 */

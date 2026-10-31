@@ -320,18 +320,80 @@ object ShellEnv {
     }
 
     /**
-     * 把脚本暂存为「纯 ASCII 路径 + LF 换行 + 正确 shebang」的可执行文件。
-     * 1. 避开 su 对非 ASCII（中文文件名）参数的转码问题；
-     * 2. 避开 /data/user/0/... 符号链接在 root 命名空间下的解析差异；
-     * 3. 修掉 Windows 换行符（\r\n 会让 sh 报 not found）和 #!/bin/bash 这类不存在的解释器。
+     * 把脚本暂存为可执行的副本。
+     *
+     * 关键：**全程按字节处理，绝不整文件走 String**。
+     * 内嵌二进制数据（base64 payload、打包的压缩包等）的脚本一旦用 UTF-8 解码再编码，
+     * 无效字节会被替换成 U+FFFD，数据损坏，脚本里的解压步骤就会报
+     * `gzip: not gzip / Cannot decompress`。
+     *
+     * 只做两件最小改动（且都在字节层面）：
+     * 1. 首行 shebang 指向不存在的解释器时，替换为 #!/system/bin/sh；
+     * 2. 路径改为纯 ASCII（二进制内容本身完全不动）。
      */
     fun stageScript(source: File, id: String): File {
         val stageDir = (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }
         val target = File(stageDir, asciiName(id) + ".sh")
-        target.writeText(normalize(source.readText()))
+        val bytes = source.readBytes()
+        val patched = fixShebang(bytes)
+        target.writeBytes(patched)
         runCatching { target.setExecutable(true, false) }
         runCatching { target.setReadable(true, false) }
         return target
+    }
+
+    data class StageReport(
+        val sizeBytes: Long,
+        val sameSize: Boolean,
+        val isBinary: Boolean,
+        val shebang: String,
+        val shebangFixed: Boolean
+    )
+
+    /** 暂存结果的体检报告，用于确认内容没被动过。 */
+    fun inspectStaged(staged: File, original: File): StageReport {
+        val origBytes = runCatching { original.readBytes() }.getOrNull()
+        val newBytes = runCatching { staged.readBytes() }.getOrNull()
+        val head = newBytes?.let { readShebang(it) } ?: ""
+        return StageReport(
+            sizeBytes = staged.length(),
+            sameSize = origBytes != null && newBytes != null && origBytes.size == newBytes.size,
+            isBinary = newBytes?.let { looksBinary(it) } ?: false,
+            shebang = head,
+            shebangFixed = head.startsWith("#!/system/bin/sh")
+        )
+    }
+
+    /** 首行 shebang 无效时替换；其余字节原样保留。 */
+    private fun fixShebang(bytes: ByteArray): ByteArray {
+        val firstLineEnd = bytes.indexOf(0x0A.toByte())
+        if (!bytes.startsWith(byteArrayOf(0x23, 0x21))) return bytes   // 不以 #! 开头，不动
+        val end = if (firstLineEnd < 0) bytes.size else firstLineEnd
+        val shebang = String(bytes, 0, end, Charsets.UTF_8).trim()
+        val interp = shebang.removePrefix("#!").trim()
+        val valid = interp == "/system/bin/sh" || interp == "/bin/sh" ||
+            interp == "sh" || interp == "/system/bin/mksh"
+        if (valid) return bytes
+        val replacement = "#!/system/bin/sh".toByteArray(Charsets.UTF_8)
+        return replacement + bytes.copyOfRange(end, bytes.size)
+    }
+
+    private fun readShebang(bytes: ByteArray): String {
+        if (!bytes.startsWith(byteArrayOf(0x23, 0x21))) return "无 shebang"
+        val end = bytes.indexOf(0x0A.toByte()).let { if (it < 0) bytes.size.coerceAtMost(60) else it }
+        return String(bytes, 0, end, Charsets.UTF_8).trim().take(60)
+    }
+
+    /** 粗略判断是否含二进制数据：出现 NUL 或大量非文本字节。 */
+    private fun looksBinary(bytes: ByteArray): Boolean {
+        val sample = bytes.copyOfRange(0, minOf(bytes.size, 65536))
+        var suspicious = 0
+        for (b in sample) {
+            val v = b.toInt() and 0xFF
+            if (v == 0x00) return true
+            if (v < 0x09 || (v > 0x0D && v < 0x20)) suspicious++
+        }
+        return suspicious > sample.size / 100   // 超过 1% 即视为二进制
     }
 
     /**
