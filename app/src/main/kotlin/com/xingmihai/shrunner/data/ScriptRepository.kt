@@ -146,8 +146,34 @@ class ScriptRepository private constructor(private val app: Application) {
         writeMeta(id, meta)
     }
 
+    /**
+     * 读取脚本全文。
+     * 调用方必须自行切到 IO 线程——大脚本在主线程读取会 ANR。
+     */
     fun readText(id: String): String = runCatching { fileOf(id).readText() }.getOrDefault("")
 
+    /** 只读取开头若干字符（大文件预览用，避免整体入内存）。 */
+    fun readHead(id: String, limit: Int): String = runCatching {
+        val buf = CharArray(limit)
+        val n = fileOf(id).bufferedReader(Charsets.UTF_8).use { r ->
+            var total = 0
+            while (total < limit) {
+                val got = r.read(buf, total, limit - total)
+                if (got <= 0) break
+                total += got
+            }
+            total
+        }
+        String(buf, 0, n)
+    }.getOrDefault("")
+
+    /** 文件大小（字节），不读内容。 */
+    fun sizeOf(id: String): Long = runCatching { fileOf(id).length() }.getOrDefault(0L)
+
+    /**
+     * 写入脚本。
+     * 调用方必须自行切到 IO 线程——大脚本在主线程写入会 ANR。
+     */
     fun writeText(id: String, content: String) {
         fileOf(id).writeText(content)
     }

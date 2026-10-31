@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedWriter
 import java.io.OutputStreamWriter
@@ -143,12 +144,9 @@ class RootSession private constructor(
             val session = RootSession(process, su)
             val lines = mutableListOf<String>()
             var code: Int? = null
-            val job = CoroutineScope(Dispatchers.IO).launch {
+            // 用 join 等协程结束，不用忙等（忙等既耗 CPU 又不精确）
+            runBlocking(Dispatchers.IO) {
                 code = session.exec("echo SHRUNNER_SESSION_OK", 6000) { lines += it }
-            }
-            val start = System.currentTimeMillis()
-            while (job.isActive && System.currentTimeMillis() - start < 8000) {
-                Thread.sleep(50)
             }
             val ok = code != null && lines.any { it.contains("SHRUNNER_SESSION_OK") }
             if (!ok) {

@@ -31,7 +31,7 @@ fun copyToClipboard(context: Context, label: String, text: String) {
     manager.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-/** 把日志写入应用私有目录，便于导出。 */
+/** 把日志写入应用私有目录。调用方需在 IO 线程调用（日志可能很长）。 */
 fun exportLog(context: Context, name: String, content: String): File {
     val dir = File(context.filesDir, "logs").apply { mkdirs() }
     val file = File(dir, "$name.log")

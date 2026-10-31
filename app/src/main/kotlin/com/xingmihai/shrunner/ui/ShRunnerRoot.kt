@@ -75,8 +75,9 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
     var settingsFor by remember { mutableStateOf<ScriptEntry?>(null) }
 
     LaunchedEffect(Unit) {
-        ShellEngine.modePrefs = context.getSharedPreferences("engine", 0)
-        ShellEngine.rememberMode(ShellEngine.modePrefs!!)
+        val enginePrefs = context.getSharedPreferences("engine", 0)
+        ShellEngine.modePrefs = enginePrefs
+        ShellEngine.rememberMode(enginePrefs)
     }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->

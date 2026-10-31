@@ -116,6 +116,20 @@ jobs:
             exit 1
           fi
 
+      - name: Static sanity check
+        run: |
+          mkdir -p ci-logs
+          {
+            echo "== 静态检查 =="
+            SRC=app/src/main/kotlin
+            echo "-- !! 强解包 --"
+            grep -rn '\w!!' "$SRC" || echo "无"
+            echo "-- 主线程忙等 --"
+            grep -rn 'Thread.sleep' "$SRC" || echo "无"
+            echo "-- 空 catch --"
+            grep -rnE 'catch[^)]*\)\s*\{\s*\}' "$SRC" || echo "无"
+          } | tee ci-logs/static.log
+
       - name: Verify signature
         if: steps.apkbuild.outcome == 'success'
         run: |

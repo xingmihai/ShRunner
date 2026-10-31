@@ -51,16 +51,36 @@ fun EditorScreen(
     LaunchedEffect(scriptId) { viewModel.load(scriptId) }
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        if (state.loading) {
+            Text(
+                text = "正在读取脚本…",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+            return@Column
+        }
+
+        if (state.readOnly) {
+            Text(
+                text = "文件过大（${"%.1f MB".format(state.fullSizeBytes / 1048576.0)}），" +
+                    "已切换为只读预览开头部分。这类脚本通常内嵌编码数据，直接运行即可。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        }
+
         OutlinedTextField(
             value = state.name,
             onValueChange = viewModel::onNameChange,
             label = { Text("脚本名") },
             singleLine = true,
+            enabled = !state.readOnly,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = { onSaved(viewModel.save()) }) { Text("保存") }
+            Button(onClick = { onSaved(viewModel.save()) }, enabled = !state.readOnly) { Text("保存") }
             OutlinedButton(
                 onClick = { state.id?.let(onRun) },
                 enabled = state.id != null
@@ -69,32 +89,6 @@ fun EditorScreen(
         Spacer(modifier = Modifier.height(12.dp))
         HorizontalDivider()
         Spacer(modifier = Modifier.height(8.dp))
-
-        // 超大文件保护：这类脚本多半内嵌编码块，编辑没有意义，
-        // 而且塞进 TextField 会卡死界面（渲染与光标计算都是字符级的）
-        val tooLarge = state.text.length > EDITABLE_LIMIT
-        if (tooLarge) {
-            Text(
-                text = "文件过大（${state.text.length} 字符），已切换为只读预览。" +
-                    "这类脚本通常内嵌了编码数据，建议直接运行而不是编辑。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(8.dp)
-            )
-            Text(
-                text = state.text.take(PREVIEW_LIMIT),
-                style = TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                ),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(8.dp)
-            )
-            return@Column
-        }
 
         val transformation = remember(state.text) { ShellHighlightTransformation() }
         val scroll = rememberScrollState()
@@ -124,10 +118,6 @@ fun EditorScreen(
  * 与原文本长度严格一致（它内部已保证，超长时直接原样返回）。
  * 一旦长度对不上，光标/选区偏移就会越界并导致崩溃。
  */
-/** 可编辑的字符上限与只读预览的字符上限。 */
-private const val EDITABLE_LIMIT = 1_000_000
-private const val PREVIEW_LIMIT = 60_000
-
 private class ShellHighlightTransformation : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText =
         TransformedText(highlightShell(text.text), OffsetMapping.Identity)

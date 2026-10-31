@@ -129,8 +129,9 @@ object ShellEnv {
      */
     fun probeRoot(force: Boolean = false): RootProbe {
         if (!force) cachedProbe?.let { return it }
-        cachedProbe = probeRootInternal()
-        return cachedProbe!!
+        val probe = probeRootInternal()
+        cachedProbe = probe
+        return probe
     }
 
     private fun probeRootInternal(): RootProbe {
