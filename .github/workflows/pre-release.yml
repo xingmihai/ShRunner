@@ -26,6 +26,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Install Android SDK (API 37 / build-tools 36)
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+          [ -n "$SDKMANAGER" ] || SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-37" "build-tools;36.0.0" || true
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
       - name: Set up Gradle 9.6.0
         run: |
           curl -sSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.6.0-bin.zip
@@ -37,15 +46,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Ensure Gradle wrapper
+        continue-on-error: true
         run: |
-          if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 9.6.0 --distribution-type bin
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -f gradlew gradlew.bat gradle/wrapper
-            git commit -m "chore: add gradle wrapper [skip ci]" || echo "nothing to commit"
-            git push || echo "push skipped"
-          fi
+          mkdir -p ci-logs
+          gradle wrapper --gradle-version 9.6.0 --distribution-type bin > ci-logs/wrapper.log 2>&1
+          echo "exit=$?" >> ci-logs/wrapper.log
+          if [ -f gradlew ]; then git add -f gradlew gradlew.bat gradle/wrapper; fi
 
       - name: Generate CI keystore
         run: |
@@ -57,10 +63,15 @@ jobs:
             -dname "CN=ShRunner, OU=Dev, O=ShRunner, C=CN" > /dev/null
 
       - name: Build release APK
+        id: apkbuild
+        continue-on-error: true
         run: |
-          if [ -f gradlew ]; then chmod +x gradlew && ./gradlew :app:assembleRelease; else gradle :app:assembleRelease; fi
+          mkdir -p ci-logs
+          if [ -f gradlew ]; then chmod +x gradlew; RUN=./gradlew; else RUN=gradle; fi
+          $RUN --stacktrace :app:assembleRelease 2>&1 | tee ci-logs/build.log
 
       - name: Rename APK
+        if: steps.apkbuild.outcome == 'success'
         id: apk
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
@@ -73,6 +84,7 @@ jobs:
           ls -lh out
 
       - name: Publish pre-release
+        if: steps.apkbuild.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.apk.outputs.tag }}
@@ -80,3 +92,12 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: out/*.apk
+
+      - name: Commit CI diagnostics
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f ci-logs gradlew gradlew.bat gradle/wrapper 2>/dev/null || true
+          git commit -m "ci: diagnostics [skip ci]" || echo "nothing to commit"
+          git push || echo "push skipped"
