@@ -67,8 +67,9 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p ci-logs
+          set -o pipefail
           if [ -f gradlew ]; then chmod +x gradlew; RUN=./gradlew; else RUN=gradle; fi
-          $RUN --stacktrace :app:assembleRelease 2>&1 | tee ci-logs/build.log
+          $RUN --stacktrace :app:assembleRelease > ci-logs/build.log 2>&1
 
       - name: Rename APK
         if: steps.apkbuild.outcome == 'success'
@@ -94,12 +95,29 @@ jobs:
           generate_release_notes: true
           files: out/*.apk
 
-      - name: Commit CI diagnostics
+      - name: Upload CI logs
         if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f ci-logs gradlew gradlew.bat gradle/wrapper 2>/dev/null || true
-          git commit -m "ci: diagnostics + wrapper [skip ci]" || echo "nothing to commit"
-          git pull --rebase --autostash origin main || true
-          git push origin HEAD:main || echo "push skipped"
+          mkdir -p ci-logs
+          for f in ci-logs/*; do
+            [ -f "$f" ] || continue
+            NAME="$(basename "$f")-$GITHUB_RUN_ID.log"
+            B64=$(base64 -w0 "$f")
+            jq -n --arg m "ci: $NAME [skip ci]" --arg c "$B64" '{message:$m, content:$c}' > /tmp/body.json
+            curl -s -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/contents/ci-logs/$NAME" \
+              -d @/tmp/body.json > /dev/null
+          done
+
+      - name: Commit Gradle wrapper
+        if: always()
+        run: |
+          if [ -f gradlew ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f gradlew gradlew.bat gradle/wrapper
+            git commit -m "chore: add gradle wrapper [skip ci]" || echo "nothing to commit"
+            git pull --rebase --autostash origin main || true
+            git push origin HEAD:main || echo "push skipped"
+          fi
