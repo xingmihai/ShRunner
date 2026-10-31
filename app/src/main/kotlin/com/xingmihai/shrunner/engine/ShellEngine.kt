@@ -102,6 +102,19 @@ object ShellEngine {
 
             // 逐个候选方案尝试：退出 127 或出现 su 解码错误时自动换下一种
             val plans = candidatePlans(request, scriptPath)
+            val sizeBytes = runCatching { File(scriptPath).length() }.getOrDefault(0L)
+            if (request.useRoot && sizeBytes > 2 * 1024 * 1024) {
+                appendSystem("[ShRunner] 脚本超过 2MB（${sizeBytes / 1024 / 1024}MB），su -c 有体积上限，优先用持久 root shell")
+                val code = runViaRootSession(request, scriptPath)
+                if (code != null && code == 0) {
+                    appendSystem("[ShRunner] 进程退出，退出码 $code")
+                    _state.value = RunState.Finished(
+                        request.scriptName, code, System.currentTimeMillis() - started
+                    )
+                    return
+                }
+                appendSystem("[ShRunner] 持久 shell 未成功（退出 ${code ?: "未知"}），继续尝试其他方式")
+            }
             var lastExit = -1
             var succeeded = false
             for ((index, plan) in plans.withIndex()) {
@@ -121,12 +134,20 @@ object ShellEngine {
                 }
             }
 
-            // 所有一次性方案都失败 → 改用持久 root shell 逐条短命令执行
+            // 所有一次性方案都失败 → 改用持久 root shell：脚本路径不经 su 参数解析
             if (!succeeded && request.useRoot) {
-                val code = runViaRootSession(request, staged)
+                val code = runViaRootSession(request, scriptPath)
                 if (code != null) {
                     lastExit = code
-                    succeeded = true
+                    succeeded = code == 0
+                    if (!succeeded) {
+                        // 整条执行也异常，最后再试逐条
+                        val lineCode = runLineByLine(request, staged)
+                        if (lineCode != null) {
+                            lastExit = lineCode
+                            succeeded = lineCode == 0
+                        }
+                    }
                 }
             }
 
@@ -175,35 +196,52 @@ object ShellEngine {
     }
 
     /**
-     * 兼容模式：启动一次 su 持久 shell，然后把脚本逐条短命令喂进去。
-     * 用于 su 无法一次性接受大脚本的设备。注意：跨行的 heredoc 结构可能不生效。
+     * 兼容模式 A：持久 root shell + 整条命令。
+     * 脚本路径只在 shell 内部作为参数出现，不经过 su 的参数解析，
+     * 因此可以绕过 su -c 的体积上限（4MB 能过、21MB 报 Cannot decompress 的设备靠这个救）。
      */
-    private suspend fun runViaRootSession(request: RunRequest, script: File): Int? {
+    private suspend fun runViaRootSession(request: RunRequest, scriptPath: String): Int? {
         val su = ShellEnv.suPath() ?: return null
+        val shell = ShellEnv.shellPath()
         val session = RootSession.open(su) ?: run {
-            appendSystem("[ShRunner] 兼容模式不可用：无法建立持久 root shell")
+            appendSystem("[ShRunner] 持久 root shell 不可用")
             return null
         }
-        appendSystem("[ShRunner] 启用兼容模式：${session.info()}，逐条短命令执行")
+        appendSystem("[ShRunner] 启用持久 root shell：${session.info()}，在 shell 内执行脚本")
+        return try {
+            val command = buildList {
+                add(shell)
+                add(ShellEnv.singleQuote(scriptPath))
+                request.args.forEach { add(ShellEnv.singleQuote(it)) }
+            }.joinToString(" ")
+            val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
+            session.exec(command, timeout) { line -> if (line.isNotEmpty()) append(line, Stream.STDOUT) }
+        } finally {
+            session.close()
+        }
+    }
+
+    /**
+     * 兼容模式 B（最后兜底）：持久 root shell 逐条短命令。
+     * 仅在整条执行也失败时使用；跨行结构（heredoc、函数）可能不生效。
+     */
+    private suspend fun runLineByLine(request: RunRequest, script: File): Int? {
+        val su = ShellEnv.suPath() ?: return null
+        val session = RootSession.open(su) ?: return null
+        appendSystem("[ShRunner] 兜底方案：逐条短命令执行（跨行结构可能失效）")
         return try {
             val lines = runCatching { script.readLines() }.getOrElse { return null }
-            var last = 0
             lines.forEachIndexed { index, raw ->
                 val line = raw.trim()
                 if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
-                val out = session.exec(line, 15_000)
-                out?.forEach { append(it, Stream.STDOUT) }
-                if (out == null) {
-                    appendSystem("[ShRunner] 兼容模式在第 ${index + 1} 行超时，已中止")
+                val code = session.exec(line, 15_000) { l -> if (l.isNotEmpty()) append(l, Stream.STDOUT) }
+                if (code == null) {
+                    appendSystem("[ShRunner] 第 ${index + 1} 行超时，已中止")
                     return 1
                 }
-                last = 0
             }
-            val exitOut = session.exec("echo EXIT_$?", 5000)
-            val code = exitOut?.firstOrNull { it.startsWith("EXIT_") }
-                ?.removePrefix("EXIT_")?.trim()?.toIntOrNull() ?: 0
-            appendSystem("[ShRunner] 兼容模式执行完毕")
-            code
+            appendSystem("[ShRunner] 逐条执行完毕")
+            0
         } finally {
             session.close()
         }
@@ -235,11 +273,18 @@ object ShellEngine {
             return listOf(plain)
         }
 
-        // 优先尝试 gzip 传入：这个 su 明确要求 -c 参数是可解压文件
-        val modes = mutableListOf(ShellEnv.SuMode.SU_C_GZIP)
+        val sizeMb = runCatching { File(scriptPath).length() }.getOrDefault(0L) / (1024 * 1024)
+        // 大脚本（>2MB）直接走持久 shell：su -c 对参数体积有上限，试了也是白跑
+        val bigScript = sizeMb >= 2
+
+        val modes = mutableListOf<ShellEnv.SuMode>()
+        if (!bigScript) {
+            modes += ShellEnv.SuMode.SU_C_GZIP   // 仅小脚本值得试
+        }
         probe.mode?.let { if (it !in modes) modes += it }
         ShellEnv.preferredMode?.let { if (it !in modes) modes += it }
-        ShellEnv.SuMode.entries.forEach { if (it !in modes) modes += it }
+        ShellEnv.SuMode.entries.forEach { if (it !in modes && it != ShellEnv.SuMode.SU_C_GZIP) modes += it }
+        if (bigScript) modes += ShellEnv.SuMode.SU_C_GZIP   // 放最后兜底
 
         // 预先生成 gzip 版本（失败则该模式自动跳过）
         val gzPath = ShellEnv.gzip(File(scriptPath))?.let { ShellEnv.canonical(it) }
