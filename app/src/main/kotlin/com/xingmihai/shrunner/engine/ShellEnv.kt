@@ -154,6 +154,7 @@ object ShellEnv {
 
     fun resetProbe() {
         cachedProbe = null
+        cachedPty = null
     }
 
     /** 返回 (输出, 退出码) 的短命令执行，带超时。 */
@@ -208,21 +209,39 @@ object ShellEnv {
     private var cachedPty: String? = null
 
     private fun findPtyCommand(): String? {
-        val probe = listOf(
-            shellPath(), "-c",
-            "command -v script; command -v unbuffer; command -v expect; " +
-                "command -v socat; command -v python3; command -v python"
-        )
-        val out = runShort(probe, 6).first
-        val first = out.lineSequence().map { it.trim() }.firstOrNull { it.startsWith("/") }
-        if (first != null) return first
+        val shell = shellPath()
 
-        // 兜底：busybox / toybox 以 applet 形式提供
-        for (box in listOfNotNull(toolboxPath())) {
-            val listed = runShort(listOf(box, "--list"), 6).first
-            if (listed.lineSequence().any { it.trim() == "script" }) return "$box script"
-        }
-        return null
+        // 1) 全 PATH 查找
+        val viaPath = runShort(listOf(shell, "-c", "command -v script"), 6).first
+            .lineSequence().map { it.trim() }.firstOrNull { it.startsWith("/") }
+        if (viaPath != null) return viaPath
+
+        // 2) 已知位置逐个探测（含 KernelSU / APatch / Magisk 提供的路径）
+        val paths = listOf(
+            "/system/bin/script", "/system/xbin/script", "/sbin/script",
+            "/vendor/bin/script", "/product/bin/script", "/system_ext/bin/script",
+            "/data/adb/ksu/bin/script", "/data/adb/ap/bin/script"
+        )
+        val pathCmd = "for p in " + paths.joinToString(" ") +
+            "; do if [ -x "\$p" ]; then echo "\$p"; break; fi; done"
+        val viaFile = runShort(listOf(shell, "-c", pathCmd), 6).first
+            .lineSequence().map { it.trim() }.firstOrNull { it.startsWith("/") }
+        if (viaFile != null) return viaFile
+
+        // 3) busybox / toybox 以 applet 形式提供 script
+        val boxes = listOf(
+            "/data/adb/ksu/bin/busybox", "/data/adb/ap/bin/busybox",
+            "/data/adb/magisk/busybox", "/data/adb/modules/busybox-ndk/system/bin/busybox",
+            "/system/bin/busybox", "/system/xbin/busybox", "/sbin/busybox",
+            "/system/bin/toybox", "/system/xbin/toybox"
+        )
+        val boxCmd = "for b in " + boxes.joinToString(" ") +
+            "; do if [ -x "\$b" ]; then " +
+            "if "\$b" --list 2>/dev/null | grep -qx script; then echo "\$b script"; break; fi; " +
+            "if "\$b" script --help >/dev/null 2>&1; then echo "\$b script"; break; fi; " +
+            "fi; done"
+        return runShort(listOf(shell, "-c", boxCmd), 8).first
+            .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
     }
 
     /** 用 PTY 包装一条命令；返回 null 表示没有可用工具。 */

@@ -36,8 +36,8 @@ android {
         minSdk = 26
         // Android 17（API 37）
         targetSdk = 37
-        versionCode = 24
-        versionName = "0.3.9"
+        versionCode = 25
+        versionName = "0.4.0"
     }
 
     signingConfigs {
