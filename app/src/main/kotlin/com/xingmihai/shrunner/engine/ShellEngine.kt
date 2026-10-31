@@ -58,6 +58,10 @@ object ShellEngine {
     @Volatile
     private var currentSession: RootSession? = null
 
+    /** 看到提问行时自动应答的钩子，执行结束会清空。 */
+    @Volatile
+    private var answerWatcher: ((String) -> Unit)? = null
+
     /** 把用户输入送给正在运行的脚本；返回是否送达。 */
     fun sendInput(text: String): Boolean {
         // 持久 root shell 会话优先
@@ -204,8 +208,7 @@ object ShellEngine {
         val process = startProcess(request, plan)
         currentProcess = process
         if (request.autoAnswers.isNotEmpty()) {
-            appendSystem("[ShRunner] 自动应答 ${request.autoAnswers.size} 项（普通模式按顺序输入）")
-            request.autoAnswers.forEach { sendInput(it) }
+            appendSystem("[ShRunner] 自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
         }
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
         var sawDecodeError = false
@@ -257,17 +260,30 @@ object ShellEngine {
                     8000
                 )
             }
+            if (request.env.isNotEmpty()) {
+                appendSystem("[ShRunner] 注入变量：" + request.env.entries.joinToString(", ") { (k, v) -> "$k=$v" })
+            }
             if (request.dumpEnv) {
                 session.exec("env | sort", 8000) { line ->
                     if (line.isNotBlank()) appendSystem("  $line")
                 }
             }
             session.exec("cd " + ShellEnv.singleQuote(request.workDir ?: "/"), 8000)
-            // 自动应答：把预设答案依次喂进去，脚本再提问时会自动填上
-            request.autoAnswers.takeIf { it.isNotEmpty() }?.let { answers ->
-                appendSystem("[ShRunner] 自动应答 ${answers.size} 项：${answers.joinToString(" / ")}")
-                answers.forEach { answer ->
-                    session.sendInput(answer)
+
+            // 自动应答：绝不能提前发（会被 shell 当成命令执行），
+            // 必须等脚本真的打印出提问行再逐条喂进去
+            val queue = java.util.concurrent.ConcurrentLinkedQueue(request.autoAnswers)
+            val total = queue.size
+            if (total > 0) {
+                appendSystem("[ShRunner] 自动应答已就绪 ${total} 项：${request.autoAnswers.joinToString(" / ")}")
+            }
+            answerWatcher = { line ->
+                val answer = queue.peek()
+                if (answer != null && looksLikePrompt(line)) {
+                    queue.poll()
+                    if (session.sendInput(answer)) {
+                        appendSystem("[ShRunner] 自动应答 → $answer")
+                    }
                 }
             }
             val command = buildList {
@@ -276,8 +292,14 @@ object ShellEngine {
                 request.args.forEach { add(ShellEnv.singleQuote(it)) }
             }.joinToString(" ")
             val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
-            session.exec(command, timeout) { line -> if (line.isNotEmpty()) append(line, Stream.STDOUT) }
+            session.exec(command, timeout) { line ->
+                if (line.isNotEmpty()) {
+                    append(line, Stream.STDOUT)
+                    answerWatcher?.invoke(line)
+                }
+            }
         } finally {
+            answerWatcher = null
             currentSession = null
             session.close()
         }
@@ -420,6 +442,20 @@ object ShellEngine {
             }
         }
         return process
+    }
+
+    /** 判断一行是否像在等用户输入（用于自动应答时机）。 */
+    private fun looksLikePrompt(line: String): Boolean {
+        val text = line.trim()
+        if (text.isEmpty()) return false
+        val patterns = listOf(
+            Regex("""\[\d+\s*/\s*\d+\].*[:：]\s*$"""),   // [1/2]:  这类选项提示
+            Regex("""[:：]\s*$"""),                            // 以冒号结尾
+            Regex("""\?\s*$"""),                              // 以问号结尾
+            Regex("""\(y/n\)|\(Y/n\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
+            Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose|Enter your|Choose""")
+        )
+        return patterns.any { it.containsMatchIn(text) }
     }
 
     /** 执行前把环境变量打印到输出区。 */
