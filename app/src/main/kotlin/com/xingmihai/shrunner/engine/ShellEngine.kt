@@ -252,6 +252,7 @@ object ShellEngine {
                     }
                 }
 
+                val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
                 val code = session.exec(
                     command = command,
                     timeoutMs = timeout,
