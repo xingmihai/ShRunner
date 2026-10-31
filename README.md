@@ -35,7 +35,21 @@ Pre-release（自动构建）：每次推送到 `main`、推送 `v*` 标签或�
 ```
 
 仓库已带 Gradle Wrapper（9.6.0），直接用 `./gradlew` 即可；也可使用本地 Gradle 9.6.0：`gradle :app:assembleRelease`。
-Release 构建只有在项目根目录存在 `shrunner.jks` 时才会签名（CI 预发行时会临时生成），本地默认为未签名包。
+
+## 签名
+
+签名信息只放在**本地** `local.properties`（已在 `.gitignore` 中，不会入库）：
+
+```properties
+KEYSTORE_FILE=星觅海.jks
+KEYSTORE_PASSWORD=你的库密码
+KEY_ALIAS=星觅海
+KEY_PASSWORD=你的别名密码
+```
+
+把 keystore 放到项目根目录。配好之后 debug 与 release 使用同一签名，反复安装不会因签名不一致而失败；未配置时打未签名包。
+
+CI 侧通过仓库 Secrets 注入等价的四个值：`KEYSTORE_BASE64`（keystore 的 base64）、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`，工作流会在构建前解码还原。
 
 ## 权限说明
 

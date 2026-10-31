@@ -53,14 +53,25 @@ jobs:
           echo "exit=$?" >> ci-logs/wrapper.log
           if [ -f gradlew ]; then git add -f gradlew gradlew.bat gradle/wrapper; fi
 
-      - name: Generate CI keystore
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          keytool -genkeypair -v \
-            -keystore shrunner.jks \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -alias shrunner \
-            -storepass android -keypass android \
-            -dname "CN=ShRunner, OU=Dev, O=ShRunner, C=CN" > /dev/null
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > shrunner-release.jks
+            echo "已恢复签名文件（$(stat -c%s shrunner-release.jks) 字节）"
+            {
+              echo "KEYSTORE_FILE=shrunner-release.jks"
+              echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "KEY_ALIAS=$KEY_ALIAS"
+              echo "KEY_PASSWORD=$KEY_PASSWORD"
+            } > local.properties
+          else
+            echo "未配置签名 secrets，本次打未签名包"
+          fi
 
       - name: Build release APK
         id: apkbuild

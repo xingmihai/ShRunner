@@ -4,8 +4,18 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// CI 预发行时临时生成的签名文件；本地不存在则打未签名包
-val ciKeystore = rootProject.file("shrunner.jks")
+// 签名配置：优先读 local.properties（不入库），读不到再退回环境变量（CI 用）
+val keystoreProps = rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
+    java.util.Properties().apply { f.inputStream().use { load(it) } }
+}
+fun signingValue(key: String): String? =
+    keystoreProps?.getProperty(key)?.takeIf { it.isNotBlank() } ?: System.getenv(key)?.takeIf { it.isNotBlank() }
+
+val keystoreFile = signingValue("KEYSTORE_FILE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+val keystorePassword = signingValue("KEYSTORE_PASSWORD")
+val keyAliasValue = signingValue("KEY_ALIAS")
+val keyPasswordValue = signingValue("KEY_PASSWORD")
+val canSign = keystoreFile != null && keystorePassword != null && keyAliasValue != null && keyPasswordValue != null
 
 android {
     namespace = "com.xingmihai.shrunner"
@@ -21,12 +31,12 @@ android {
     }
 
     signingConfigs {
-        if (ciKeystore.exists()) {
-            create("ci") {
-                storeFile = ciKeystore
-                storePassword = "android"
-                keyAlias = "shrunner"
-                keyPassword = "android"
+        if (canSign) {
+            create("release") {
+                storeFile = keystoreFile
+                storePassword = keystorePassword
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
             }
         }
     }
@@ -39,14 +49,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            if (ciKeystore.exists()) {
-                signingConfig = signingConfigs.getByName("ci")
+            if (canSign) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            if (canSign) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

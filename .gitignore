@@ -11,4 +11,6 @@ local.properties
 app/build
 *.jks
 *.keystore
+*.jks.txt
+local.properties
 ci-logs/
