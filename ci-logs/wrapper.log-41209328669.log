@@ -1,0 +1,16 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+Calculating task graph as no cached configuration is available for tasks: wrapper --gradle-version 9.6.0 --distribution-type bin
+
+> Configure project :app
+WARNING: The option 'android.defaults.buildfeatures.buildconfig' is deprecated.
+The current default is 'false'.
+It was removed in version 9.0 of the Android Gradle plugin.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+
+> Task :wrapper
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_3-1793456183568.json
+
+BUILD SUCCESSFUL in 15s
+1 actionable task: 1 executed
+Configuration cache entry stored.
+exit=0
