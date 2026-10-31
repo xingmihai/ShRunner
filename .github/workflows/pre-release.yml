@@ -99,6 +99,18 @@ jobs:
           if [ -f gradlew ]; then chmod +x gradlew; RUN=./gradlew; else RUN=gradle; fi
           $RUN --stacktrace :app:assembleRelease > ci-logs/build.log 2>&1
 
+      - name: Check bundled pty tool
+        if: steps.apkbuild.outcome == 'success'
+        run: |
+          mkdir -p ci-logs
+          APK=$(find app/build/outputs -type f -name "*.apk" | head -n 1)
+          {
+            echo "== APK 内置 PTY 工具检查 =="
+            unzip -l "$APK" | grep -E "lib/.*\.so" || echo "未找到任何 .so"
+            echo "---"
+            unzip -l "$APK" | grep -i "shpty" && echo "shpty 已打包" || echo "shpty 缺失"
+          } | tee ci-logs/pty.log
+
       - name: Verify signature
         if: steps.apkbuild.outcome == 'success'
         run: |
