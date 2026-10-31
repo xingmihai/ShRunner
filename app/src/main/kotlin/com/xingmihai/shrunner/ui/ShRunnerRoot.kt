@@ -55,6 +55,8 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
     var pendingEntry by remember { mutableStateOf<ScriptEntry?>(null) }
     var risks by remember { mutableStateOf<List<String>>(emptyList()) }
     var useRoot by remember { mutableStateOf(false) }
+    var rootMode by remember { mutableStateOf<com.xingmihai.shrunner.engine.ShellEnv.SuMode?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -175,6 +177,21 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                     ShTab.CONSOLE -> ConsoleScreen(
                         useRoot = useRoot,
                         onUseRootChange = { useRoot = it },
+                        rootMode = rootMode,
+                        onRootModeChange = { mode ->
+                            rootMode = mode
+                            com.xingmihai.shrunner.engine.ShellEnv.preferredMode = mode
+                            com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
+                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
+                            }
+                        },
+                        onReprobe = {
+                            com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
+                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
+                            }
+                        },
                         onStop = { ShellEngine.stop() },
                         onClear = { ShellEngine.clear() }
                     )

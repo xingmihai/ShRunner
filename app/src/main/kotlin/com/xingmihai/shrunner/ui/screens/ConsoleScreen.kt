@@ -3,6 +3,7 @@ package com.xingmihai.shrunner.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,15 +13,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -42,13 +50,16 @@ import com.xingmihai.shrunner.util.copyToClipboard
 import kotlinx.coroutines.delay
 
 private fun rootStatus(): String = ShellEnv.cachedRoot()?.let { probe ->
-    if (probe.ok) "可用（${probe.form}）" else "不可用（${probe.detail.take(20)}）"
+    if (probe.ok) "可用 · ${probe.mode?.label}" else "不可用 · ${probe.detail.take(28)}"
 } ?: "未探测"
 
 @Composable
 fun ConsoleScreen(
     useRoot: Boolean,
     onUseRootChange: (Boolean) -> Unit,
+    rootMode: ShellEnv.SuMode?,
+    onRootModeChange: (ShellEnv.SuMode?) -> Unit,
+    onReprobe: () -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
@@ -86,6 +97,32 @@ fun ConsoleScreen(
             )
             Switch(checked = useRoot, onCheckedChange = onUseRootChange)
             Text("root")
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(onClick = { expanded = true }) {
+                    Text(if (rootMode == null) "自动" else rootMode.label)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("自动探测") },
+                        onClick = { onRootModeChange(null); expanded = false }
+                    )
+                    ShellEnv.SuMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.label) },
+                            onClick = { onRootModeChange(mode); expanded = false }
+                        )
+                    }
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = rootStatus(),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onReprobe) { Text("重新探测") }
         }
 
         if (state is ShellEngine.RunState.Running) {

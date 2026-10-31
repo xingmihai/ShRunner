@@ -92,9 +92,10 @@ object ShellEngine {
             if (request.useRoot) {
                 val probe = ShellEnv.probeRoot()
                 if (!probe.ok) {
-                    appendSystem("[ShRunner] 警告：root 探测失败（${probe.detail}），本次按非 root 执行")
+                    appendSystem("[ShRunner] root 探测失败：${probe.detail}，本次按非 root 执行")
+                    probe.tried.take(3).forEach { appendSystem("[ShRunner] 尝试记录：$it") }
                 } else {
-                    appendSystem("[ShRunner] root 就绪：${probe.suPath} · ${probe.form}")
+                    appendSystem("[ShRunner] root 就绪：${probe.suPath} · ${probe.mode?.label}")
                 }
             }
 
@@ -146,26 +147,24 @@ object ShellEngine {
         else -> "（脚本自身返回）"
     }
 
-    private fun buildCommand(request: RunRequest, scriptPath: String): List<String> {
+    private fun planCommand(request: RunRequest, scriptPath: String): ShellEnv.CommandPlan {
         val shell = ShellEnv.shellPath()
-        val probe = if (request.useRoot) ShellEnv.probeRoot() else null
-        return if (probe != null && probe.ok && probe.suPath != null) {
-            val su = probe.suPath
-            val inner = ShellEnv.buildShellCommand(shell, scriptPath, request.args)
-            // 整条命令作为一个参数交给 su，避免多余参数被当成用户名/ARG0
-            if (probe.form == "su 0") listOf(su, "0", inner) else listOf(su, "-c", inner)
-        } else {
-            val command = mutableListOf(shell, scriptPath)
-            command.addAll(request.args)
-            command
+        if (!request.useRoot) {
+            val argv = mutableListOf(shell, scriptPath)
+            argv.addAll(request.args)
+            return ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
         }
+        val probe = ShellEnv.probeRoot()
+        val su = probe.suPath ?: error("未找到可用的 su，无法以 root 执行")
+        val mode = probe.mode ?: error("没有可用的 su 调用形式")
+        return ShellEnv.buildCommand(mode, su, shell, scriptPath, request.args)
     }
 
     private fun startProcess(request: RunRequest, scriptPath: String): Process {
-        val command = buildCommand(request, scriptPath)
-        appendSystem("[ShRunner] 实际命令：" + command.joinToString(" ") { ShellEnv.singleQuote(it) })
+        val plan = planCommand(request, scriptPath)
+        appendSystem("[ShRunner] 实际命令：" + plan.display)
 
-        val builder = ProcessBuilder(command)
+        val builder = ProcessBuilder(plan.argv)
         val workDir = request.workDir
         if (!workDir.isNullOrBlank() && File(workDir).isDirectory) {
             builder.directory(File(workDir))
@@ -177,7 +176,18 @@ object ShellEngine {
         env["HOME"] = request.workDir ?: "/data/local/tmp"
         env["TERM"] = "xterm-256color"
         request.env.forEach { (k, v) -> env[k] = v }
-        return builder.start()
+
+        val process = builder.start()
+        // stdin 模式：把命令写进去后立刻关闭，让 su 开始执行
+        plan.stdin?.let { text ->
+            runCatching {
+                process.outputStream.bufferedWriter().use { w ->
+                    w.write(text)
+                    w.flush()
+                }
+            }
+        }
+        return process
     }
 
     /** 手动停止当前执行。 */
