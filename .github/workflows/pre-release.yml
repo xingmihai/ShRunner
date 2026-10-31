@@ -82,6 +82,18 @@ jobs:
           if [ -f gradlew ]; then chmod +x gradlew; RUN=./gradlew; else RUN=gradle; fi
           $RUN --stacktrace :app:assembleRelease > ci-logs/build.log 2>&1
 
+      - name: Verify signature
+        if: steps.apkbuild.outcome == 'success'
+        run: |
+          APK=$(find app/build/outputs -type f -name "*.apk" | head -n 1)
+          echo "验证: $APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | head -n 1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" | head -20
+          else
+            echo "未找到 apksigner"
+          fi
+
       - name: Rename APK
         if: steps.apkbuild.outcome == 'success'
         id: apk
