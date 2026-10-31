@@ -363,15 +363,11 @@ object ShellEngine {
             add(ShellEnv.singleQuote(scriptPath))
             args.forEach { add(ShellEnv.singleQuote(it)) }
         }.joinToString(" ")
+        val wrapped = ShellEnv.wrapPty(run, ShellEnv.ptyCommand())
+        if (wrapped != null) return wrapped
         if (answers.isEmpty()) return run
         val printfArgs = answers.joinToString(" ") { ShellEnv.singleQuote(it) }
-        val feed = "printf '%s\\n' $printfArgs"
-        // 优先套 pty：部分脚本只认终端输入，直接管道会被当成空输入而取消
-        return if (ShellEnv.hasPty()) {
-            "$feed | script -qec $run /dev/null"
-        } else {
-            "$feed | $run"
-        }
+        return "printf '%s\\n' $printfArgs | $run"
     }
 
     private fun effectiveTimeout(request: RunRequest): Long =
