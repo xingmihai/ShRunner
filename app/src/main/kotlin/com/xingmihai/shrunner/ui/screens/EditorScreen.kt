@@ -70,7 +70,33 @@ fun EditorScreen(
         HorizontalDivider()
         Spacer(modifier = Modifier.height(8.dp))
 
-        val transformation = remember(state.text) { ShellHighlightTransformation(state.text) }
+        // 超大文件保护：这类脚本多半内嵌编码块，编辑没有意义，
+        // 而且塞进 TextField 会卡死界面（渲染与光标计算都是字符级的）
+        val tooLarge = state.text.length > EDITABLE_LIMIT
+        if (tooLarge) {
+            Text(
+                text = "文件过大（${state.text.length} 字符），已切换为只读预览。" +
+                    "这类脚本通常内嵌了编码数据，建议直接运行而不是编辑。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(8.dp)
+            )
+            Text(
+                text = state.text.take(PREVIEW_LIMIT),
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                ),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
+            )
+            return@Column
+        }
+
+        val transformation = remember(state.text) { ShellHighlightTransformation() }
         val scroll = rememberScrollState()
         BasicTextField(
             value = state.text,
@@ -91,8 +117,18 @@ fun EditorScreen(
     }
 }
 
-/** 只在显示层做关键字着色，不改字符，因此偏移量一一对应。 */
-private class ShellHighlightTransformation(private val source: String) : VisualTransformation {
+/**
+ * 只在显示层做关键字着色。
+ *
+ * 注意：这里必须用 OffsetMapping.Identity，前提是 highlightShell 返回的文本
+ * 与原文本长度严格一致（它内部已保证，超长时直接原样返回）。
+ * 一旦长度对不上，光标/选区偏移就会越界并导致崩溃。
+ */
+/** 可编辑的字符上限与只读预览的字符上限。 */
+private const val EDITABLE_LIMIT = 1_000_000
+private const val PREVIEW_LIMIT = 60_000
+
+private class ShellHighlightTransformation : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText =
         TransformedText(highlightShell(text.text), OffsetMapping.Identity)
 }
