@@ -80,7 +80,6 @@ object ShellEngine {
         _state.value = RunState.Running(request.scriptName, started)
         appendSystem(buildBanner(request))
 
-        var process: Process? = null
         try {
             // 先修一遍换行符/shebang，再暂存到纯 ASCII 路径执行
             val staged = runCatching { ShellEnv.stageScript(File(request.scriptPath), request.scriptId) }
@@ -89,6 +88,8 @@ object ShellEngine {
             if (scriptPath != ShellEnv.canonical(File(request.scriptPath))) {
                 appendSystem("[ShRunner] 已暂存到：$scriptPath")
             }
+            appendSystem(describeScript(staged))
+
             if (request.useRoot) {
                 val probe = ShellEnv.probeRoot()
                 if (!probe.ok) {
@@ -99,34 +100,87 @@ object ShellEngine {
                 }
             }
 
-            process = startProcess(request, scriptPath)
-            currentProcess = process
-
-            val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
-            val finished = withTimeoutOrNull(effectiveTimeout(request)) {
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    append(line, Stream.STDOUT)
+            // 逐个候选方案尝试：退出 127 或出现 su 解码错误时自动换下一种
+            val plans = candidatePlans(request, scriptPath)
+            var lastExit = -1
+            for ((index, plan) in plans.withIndex()) {
+                if (index > 0) {
+                    appendSystem("[ShRunner] 上一种方式失败（退出 $lastExit），自动换用：${plan.display}")
                 }
-                process.waitFor()
+                val result = execute(request, plan)
+                lastExit = result.first
+                if (lastExit != 127 && !result.second) break
             }
 
-            if (finished == null) {
-                process.destroy()
-                appendSystem("[ShRunner] 执行超时（${request.timeoutMs} ms），已终止进程")
-                _state.value = RunState.Finished(request.scriptName, EXIT_TIMEOUT, System.currentTimeMillis() - started)
-            } else {
-                appendSystem("[ShRunner] 进程退出，退出码 $finished${exitHint(finished)}")
-                _state.value = RunState.Finished(request.scriptName, finished, System.currentTimeMillis() - started)
-            }
+            appendSystem("[ShRunner] 进程退出，退出码 $lastExit${exitHint(lastExit)}")
+            _state.value = RunState.Finished(request.scriptName, lastExit, System.currentTimeMillis() - started)
         } catch (t: Throwable) {
             val message = t.message ?: t::class.java.simpleName
             appendSystem("[ShRunner] 执行失败：$message")
             _state.value = RunState.Failed(request.scriptName, message)
         } finally {
-            runCatching { process?.destroy() }
+            runCatching { currentProcess?.destroy() }
             currentProcess = null
         }
+    }
+
+    /** 返回 (退出码, 输出中是否出现 su 解码类错误)。 */
+    private suspend fun execute(request: RunRequest, plan: ShellEnv.CommandPlan): Pair<Int, Boolean> {
+        appendSystem("[ShRunner] 实际命令：" + plan.display)
+        val process = startProcess(request, plan)
+        currentProcess = process
+        val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
+        var sawDecodeError = false
+        val finished = withTimeoutOrNull(effectiveTimeout(request)) {
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.contains("decompress", true) || line.contains("not gzip", true)) {
+                    sawDecodeError = true
+                }
+                append(line, Stream.STDOUT)
+            }
+            process.waitFor()
+        }
+        if (finished == null) {
+            process.destroy()
+            appendSystem("[ShRunner] 执行超时（${request.timeoutMs} ms），已终止进程")
+            return EXIT_TIMEOUT to sawDecodeError
+        }
+        return finished to sawDecodeError
+    }
+
+    /** 脚本体检：大小、换行、首行 shebang，快速判断是不是脚本自身的问题。 */
+    private fun describeScript(file: File): String {
+        val text = runCatching { file.readText() }.getOrNull() ?: return "[ShRunner] 无法读取脚本"
+        val size = file.length()
+        val crlf = text.contains("\r\n")
+        val first = text.lineSequence().firstOrNull()?.take(40).orEmpty()
+        return "[ShRunner] 脚本体检：${size} 字节 · ${if (crlf) "CRLF 换行" else "LF 换行"} · 首行「$first」"
+    }
+
+    /** 候选执行方案：首选探测通过的，其余作为失败回退。 */
+    private fun candidatePlans(request: RunRequest, scriptPath: String): List<ShellEnv.CommandPlan> {
+        val shell = ShellEnv.shellPath()
+        val plain = run {
+            val argv = mutableListOf(shell, scriptPath)
+            argv.addAll(request.args)
+            ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
+        }
+        if (!request.useRoot) return listOf(plain)
+
+        val probe = ShellEnv.probeRoot()
+        val su = probe.suPath
+        if (!probe.ok || su == null) {
+            appendSystem("[ShRunner] 已回退为普通（非 root）执行")
+            return listOf(plain)
+        }
+
+        val modes = mutableListOf<ShellEnv.SuMode>()
+        probe.mode?.let { modes += it }
+        ShellEnv.preferredMode?.let { if (it !in modes) modes += it }
+        ShellEnv.SuMode.entries.forEach { if (it !in modes) modes += it }
+
+        return modes.map { ShellEnv.buildCommand(it, su, shell, scriptPath, request.args) } + plain
     }
 
     private fun effectiveTimeout(request: RunRequest): Long =
@@ -165,10 +219,7 @@ object ShellEngine {
         return ShellEnv.buildCommand(probe.mode, probe.suPath, shell, scriptPath, request.args)
     }
 
-    private fun startProcess(request: RunRequest, scriptPath: String): Process {
-        val plan = planCommand(request, scriptPath)
-        appendSystem("[ShRunner] 实际命令：" + plan.display)
-
+    private fun startProcess(request: RunRequest, plan: ShellEnv.CommandPlan): Process {
         val builder = ProcessBuilder(plan.argv)
         val workDir = request.workDir
         if (!workDir.isNullOrBlank() && File(workDir).isDirectory) {

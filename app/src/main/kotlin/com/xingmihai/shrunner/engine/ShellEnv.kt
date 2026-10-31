@@ -40,6 +40,9 @@ object ShellEnv {
         /** `su -c "script args"` —— 直接跑脚本，靠 shebang */
         SU_C_DIRECT("su -c \"脚本\""),
 
+        /** `su -c sh 脚本`（不带引号），专治把引号一起吃进去的 su */
+        SU_C_SH_PLAIN("su -c "sh 脚本"（无引号）"),
+
         /** `su -s sh -c "script args"` —— 显式指定 shell */
         SU_S_C("su -s sh -c \"脚本\""),
 
@@ -167,6 +170,10 @@ object ShellEnv {
         return when (mode) {
             SuMode.SU_C_SH -> {
                 val payload = "$shell $quotedScript$quotedArgs"
+                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
+            }
+            SuMode.SU_C_SH_PLAIN -> {
+                val payload = "$shell $scriptPath$quotedArgs"
                 CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
             }
             SuMode.SU_0_SH -> {
