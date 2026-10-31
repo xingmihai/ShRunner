@@ -214,11 +214,23 @@ object ShellEngine {
 
                 // 持久会话下 stdin 一直保持打开，脚本 read 会阻塞而不是读到 EOF，
                 // 因此可以在识别到提问后再写入，不存在竞态。
-                val command = buildList {
+                val plain = buildList {
                     add(shell)
                     add(ShellEnv.singleQuote(scriptPath))
                     request.args.forEach { add(ShellEnv.singleQuote(it)) }
                 }.joinToString(" ")
+
+                // 套 pty：很多交互脚本只在真终端下才等输入，
+                // 管道里 read 会立刻失败、拿到空值就直接判定为取消（操作已取消）
+                val command = if (ShellEnv.hasPty()) {
+                    appendSystem("已分配伪终端（pty）执行，脚本可正常等待输入")
+                    "script -qec " + ShellEnv.singleQuote(plain) + " /dev/null"
+                } else {
+                    if (request.autoAnswers.isNotEmpty()) {
+                        appendSystem("警告：系统无 script 命令，无法分配伪终端，交互式脚本可能读不到输入")
+                    }
+                    plain
+                }
 
                 val queue = ConcurrentLinkedQueue(request.autoAnswers)
                 if (queue.isNotEmpty()) {
@@ -257,12 +269,13 @@ object ShellEngine {
                     command = command,
                     timeoutMs = timeout,
                     onLine = { line ->
-                        if (line.isNotEmpty()) {
-                            append(line, Stream.STDOUT)
-                            answerWatcher?.invoke(line)
+                        val clean = line.replace("\r", "")
+                        if (clean.isNotEmpty()) {
+                            append(clean, Stream.STDOUT)
+                            answerWatcher?.invoke(clean)
                         }
                     },
-                    onPartial = { text -> answerWatcher?.invoke(text) }
+                    onPartial = { text -> answerWatcher?.invoke(text.replace("\r", "")) }
                 )
                 val exit = code ?: return EXIT_TIMEOUT to false
                 exit to (exit == 0)
