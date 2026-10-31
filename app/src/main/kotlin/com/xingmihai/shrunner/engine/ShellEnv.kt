@@ -1,6 +1,8 @@
 package com.xingmihai.shrunner.engine
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -128,12 +130,14 @@ object ShellEnv {
             if (!File(su).exists()) continue
             for (mode in modes) {
                 val ok = when (mode) {
-                    SuMode.SESSION -> RootSession.open(su)?.let { session ->
-                        var out: String? = null
-                        session.exec("id", 6000) { line -> if (line.contains("uid=0")) out = line }
-                        session.close()
-                        out != null
-                    } ?: false
+                    SuMode.SESSION -> runBlocking(Dispatchers.IO) {
+                        RootSession.open(su)?.let { session ->
+                            var out: String? = null
+                            session.exec("id", 6000) { line -> if (line.contains("uid=0")) out = line }
+                            session.close()
+                            out != null
+                        } ?: false
+                    }
                     else -> {
                         val r = runShort(listOf(su, "-c", "echo SHRUNNER_OK"))
                         r.first.contains("SHRUNNER_OK")
