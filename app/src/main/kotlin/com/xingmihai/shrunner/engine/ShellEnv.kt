@@ -218,6 +218,9 @@ object ShellEnv {
         return !asciiPath && !useSession
     }
 
+    /** 暂存副本的目标路径。 */
+    fun stageFileFor(id: String): File = File(ensureStageDir() ?: File("/data/local/tmp"), asciiName(id) + ".sh")
+
     /** 需要暂存时调用：流式拷贝 + 按需修复 shebang，避免整体入内存。 */
     fun stageScript(source: File, id: String): File {
         val dir = stageDirOf(source)

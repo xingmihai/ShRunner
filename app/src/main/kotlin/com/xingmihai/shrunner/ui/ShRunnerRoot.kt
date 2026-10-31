@@ -227,13 +227,19 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                             requestRun(file.nameWithoutExtension, file.name, file.absolutePath)
                         },
                         onImport = { path ->
-                            val file = File(path)
-                            if (repo.importPath(file.absolutePath) != null) {
-                                listVm.refresh()
-                                Toast.makeText(context, "已导入：${file.name}", Toast.LENGTH_SHORT).show()
-                                tab = ShTab.SCRIPTS
-                            } else {
-                                Toast.makeText(context, "导入失败", Toast.LENGTH_SHORT).show()
+                            scope.launch {
+                                val (entry, error) = repo.importPath(path)
+                                if (entry != null) {
+                                    listVm.refresh()
+                                    Toast.makeText(context, "已导入：${entry.name}", Toast.LENGTH_SHORT).show()
+                                    tab = ShTab.SCRIPTS
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "导入失败：${error ?: "未知原因"}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         }
                     )

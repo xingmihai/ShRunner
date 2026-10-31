@@ -73,19 +73,26 @@ class ScriptRepository private constructor(private val app: Application) {
         return if (ok) ScriptEntry(id, id, target, target.lastModified(), target.length()) else null
     }
 
-    /** 从本地路径导入（文件浏览器用）。 */
-    fun importPath(path: String): ScriptEntry? {
+    /**
+     * 从本地路径导入（文件浏览器用）。
+     * 应用自身没有存储权限，读 /sdcard 等路径会失败，此时改用 root shell 复制。
+     * 返回 Pair(条目, 失败原因)，成功时原因为 null。
+     */
+    suspend fun importPath(path: String): Pair<ScriptEntry?, String?> {
         val source = File(path)
-        if (!source.isFile) return null
+        if (!source.exists()) return null to "文件不存在"
+        if (source.isDirectory) return null to "这是个目录"
+
         val id = uniqueId(source.name)
         val target = fileOf(id)
-        val ok = runCatching {
-            source.inputStream().use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-            true
-        }.getOrDefault(false)
-        return if (ok) ScriptEntry(id, id, target, target.lastModified(), target.length()) else null
+        val error = com.xingmihai.shrunner.engine.ShellCopy.copy(source.absolutePath, target.absolutePath)
+        if (error != null) {
+            runCatching { target.delete() }
+            return null to error
+        }
+        runCatching { target.setReadable(true, false) }
+        runCatching { target.setWritable(true, false) }
+        return ScriptEntry(id, id, target, target.lastModified(), target.length()) to null
     }
 
     private fun uniqueId(rawName: String): String {

@@ -111,14 +111,7 @@ object ShellEngine {
             // 大脚本零拷贝：shebang 正确且路径 ASCII 时直接用原文件
             val useSession = request.useRoot &&
                 (lastOkMode == ShellEnv.SuMode.SESSION || lastOkMode == null)
-            val scriptPath = if (ShellEnv.needsStaging(original, useSession)) {
-                val staged = runCatching { ShellEnv.stageScript(original, request.scriptId) }
-                    .getOrDefault(original)
-                if (staged.path != original.path) appendSystem("已暂存副本：${staged.name}")
-                ShellEnv.canonical(staged)
-            } else {
-                ShellEnv.canonical(original)
-            }
+            val scriptPath = resolveScriptPath(request, original, useSession)
 
             if (request.useRoot) {
                 val probe = ShellEnv.probeRoot()
@@ -151,6 +144,33 @@ object ShellEngine {
             currentProcess = null
             currentSession = null
         }
+    }
+
+    /**
+     * 决定实际执行哪个文件：
+     * 1. 应用读得到 → 需要暂存才暂存，否则直接用原文件（大脚本零拷贝）；
+     * 2. 应用读不到（/sdcard 等无存储权限路径）→ 用 root shell 复制一份再执行。
+     */
+    private suspend fun resolveScriptPath(
+        request: RunRequest,
+        original: File,
+        useSession: Boolean
+    ): String {
+        val readable = runCatching { original.isFile && original.canRead() }.getOrDefault(false)
+        if (!readable) {
+            appendSystem("应用无权直接读取该文件，先用 root 复制副本")
+            val staged = ShellEnv.stageFileFor(request.scriptId)
+            val error = ShellCopy.copy(original.absolutePath, staged.absolutePath)
+            if (error != null) throw IllegalStateException(error)
+            return ShellEnv.canonical(staged)
+        }
+        if (ShellEnv.needsStaging(original, useSession)) {
+            val staged = runCatching { ShellEnv.stageScript(original, request.scriptId) }
+                .getOrDefault(original)
+            if (staged.path != original.path) appendSystem("已暂存副本：${staged.name}")
+            return ShellEnv.canonical(staged)
+        }
+        return ShellEnv.canonical(original)
     }
 
     /** 候选方式顺序：上次成功的 → 持久会话 → su -c → su 0 → 非 root。 */
