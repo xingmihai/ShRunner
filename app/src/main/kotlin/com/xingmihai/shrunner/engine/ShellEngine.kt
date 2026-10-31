@@ -11,7 +11,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
 enum class Stream { STDOUT, STDERR, SYSTEM }
@@ -220,48 +219,16 @@ object ShellEngine {
                     request.args.forEach { add(ShellEnv.singleQuote(it)) }
                 }.joinToString(" ")
 
-                // 套 pty：很多交互脚本只在真终端下才等输入，
-                // 管道里 read 会立刻失败、拿到空值就直接判定为取消（操作已取消）
-                val command = if (ShellEnv.hasPty()) {
-                    appendSystem("已分配伪终端（pty）执行，脚本可正常等待输入")
-                    "script -qec " + ShellEnv.singleQuote(plain) + " /dev/null"
+                // 两种模式二选一：
+                // · 配了自动应答 → printf 管道预填，脚本每一次 read 依次取到，全程无人值守。
+                //   （已验证脚本确实能从管道读到值；答案为空时脚本才会判定为取消）
+                // · 没配 → 直接执行，stdin 就是会话输入，可用输出页底部的输入框手动回答。
+                val command = if (request.autoAnswers.isNotEmpty()) {
+                    appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+                    val printfArgs = request.autoAnswers.joinToString(" ") { ShellEnv.singleQuote(it) }
+                    "printf '%s\\n' $printfArgs | $plain"
                 } else {
-                    if (request.autoAnswers.isNotEmpty()) {
-                        appendSystem("警告：系统无 script 命令，无法分配伪终端，交互式脚本可能读不到输入")
-                    }
                     plain
-                }
-
-                val queue = ConcurrentLinkedQueue(request.autoAnswers)
-                if (queue.isNotEmpty()) {
-                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
-                }
-                // 防抖：提问常不带换行，逐字符回调下必须等文本稳定再应答，
-                // 否则「安全警告:」这种中途出现的冒号会被误判成提问
-                val lastText = java.util.concurrent.atomic.AtomicReference("")
-                val lastChangeAt = java.util.concurrent.atomic.AtomicLong(0L)
-                val answered = java.util.concurrent.atomic.AtomicReference("")
-                answerWatcher = { text ->
-                    val now = System.currentTimeMillis()
-                    if (text != lastText.get()) {
-                        lastText.set(text)
-                        lastChangeAt.set(now)
-                    } else if (now - lastChangeAt.get() >= 400 && answered.get() != text) {
-                        val kind = promptKind(text)
-                        val answer = queue.peek()
-                        if (kind != null && answer != null) {
-                            if (kind == PromptKind.YN && !answer.trim().equals("y", true) &&
-                                !answer.trim().equals("n", true)
-                            ) {
-                                answered.set(text)
-                                appendSystem("提问是 y/n，但预设答案为「$answer」，未发送。请改填 y 或 n")
-                            } else {
-                                answered.set(text)
-                                queue.poll()
-                                if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
-                            }
-                        }
-                    }
                 }
 
                 val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
@@ -272,10 +239,8 @@ object ShellEngine {
                         val clean = line.replace("\r", "")
                         if (clean.isNotEmpty()) {
                             append(clean, Stream.STDOUT)
-                            answerWatcher?.invoke(clean)
                         }
                     },
-                    onPartial = { text -> answerWatcher?.invoke(text.replace("\r", "")) }
                 )
                 val exit = code ?: return EXIT_TIMEOUT to false
                 exit to (exit == 0)

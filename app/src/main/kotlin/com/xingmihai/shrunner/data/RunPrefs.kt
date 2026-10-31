@@ -46,7 +46,8 @@ class RunPrefs private constructor(context: Context) {
         private const val KEY_CUSTOM_ENV = "custom_env"
         private const val KEY_USE_ROOT = "use_root"
         private const val KEY_DUMP_ENV = "dump_env"
-        private const val KEY_ANSWERS = "auto_answers"
+        // v2：旧版本把「1」写进了 auto_answers，换 key 直接丢弃遗留值
+        private const val KEY_ANSWERS = "auto_answers_v2"
         private const val KEY_VERBOSE = "verbose"
 
         @Volatile

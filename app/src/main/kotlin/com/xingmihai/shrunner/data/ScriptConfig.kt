@@ -26,7 +26,7 @@ class ScriptConfig private constructor(context: Context) {
 
     fun of(id: String): Config {
         if (id.isBlank()) return Config()
-        val raw = prefs.getString("cfg_$id", null) ?: return Config()
+        val raw = prefs.getString("cfg_v2_$id", null) ?: return Config()
         val json = runCatching { JSONObject(raw) }.getOrElse { return Config() }
         return Config(
             autoAnswers = json.optString("answers", ""),
@@ -44,7 +44,7 @@ class ScriptConfig private constructor(context: Context) {
             put("workDir", config.workDir)
             put("root", config.rootOverride)
         }
-        prefs.edit { putString("cfg_$id", json.toString()) }
+        prefs.edit { putString("cfg_v2_$id", json.toString()) }
     }
 
     fun answers(id: String): List<String> = of(id).autoAnswers.lineSequence()
