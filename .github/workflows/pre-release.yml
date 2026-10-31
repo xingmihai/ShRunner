@@ -56,6 +56,20 @@ jobs:
           echo "exit=$?" >> ci-logs/wrapper.log
           if [ -f gradlew ]; then git add -f gradlew gradlew.bat gradle/wrapper; fi
 
+      - name: Install NDK and CMake
+        run: |
+          SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMAN" ]; then
+            SDKMAN=$(find "$ANDROID_HOME" -name sdkmanager -type f | head -n 1)
+          fi
+          if [ -z "$SDKMAN" ]; then
+            echo "未找到 sdkmanager，尝试让 AGP 自动下载 NDK"
+            exit 0
+          fi
+          yes | "$SDKMAN" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          "$SDKMAN" --sdk_root="$ANDROID_HOME" --install "platform-tools" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1" 2>&1 | tail -n 5 || true
+          echo "已安装 SDK 组件"
+
       - name: Restore signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

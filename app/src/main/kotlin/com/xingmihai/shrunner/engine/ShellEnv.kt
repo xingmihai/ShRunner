@@ -56,7 +56,16 @@ object ShellEnv {
             dir.mkdirs()
             stageDir = dir
         }
+        // 内置 PTY 工具随 APK 装在 nativeLibraryDir 下
+        runCatching {
+            val lib = File(context.applicationInfo.nativeLibraryDir, "libshpty.so")
+            if (lib.exists()) builtInPty = lib.absolutePath
+        }
     }
+
+    /** 内置的 shpty 可执行文件路径（APK 自带，不依赖系统的 script / busybox）。 */
+    @Volatile
+    private var builtInPty: String? = null
 
     private fun ensureStageDir(): File? {
         stageDir?.let { return it }
@@ -201,6 +210,11 @@ object ShellEnv {
      */
     fun ptyCommand(force: Boolean = false): String? {
         if (!force) cachedPty?.let { return it }
+        // 内置工具最可靠，优先
+        builtInPty?.let {
+            cachedPty = it
+            return it
+        }
         cachedPty = findPtyCommand()
         return cachedPty
     }
@@ -256,11 +270,16 @@ object ShellEnv {
     }
 
     /** 用 PTY 包装一条命令；返回 null 表示没有可用工具。 */
-    fun wrapPty(command: String, pty: String?): String? {
+    fun wrapPty(command: String, pty: String?, shell: String = shellPath()): String? {
         val tool = pty ?: return null
         return when {
-            tool.endsWith("script") -> "$tool -q -e -c " + singleQuote(command) + " /dev/null"
-            tool.endsWith("unbuffer") -> "$tool $command"
+            // 内置的 shpty：<工具> <shell> -c '<命令>'
+            tool.endsWith("libshpty.so") ->
+                "$tool $shell -c " + singleQuote(command)
+            tool.endsWith("script") ->
+                "$tool -q -e -c " + singleQuote(command) + " /dev/null"
+            tool.endsWith("unbuffer") ->
+                "$tool $command"
             else -> null
         }
     }

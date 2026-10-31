@@ -30,14 +30,15 @@ val canSign = keystoreFile != null && keystorePassword != null && keyAliasValue 
 android {
     namespace = "com.xingmihai.shrunner"
     compileSdk = 37
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.xingmihai.shrunner"
         minSdk = 26
         // Android 17（API 37）
         targetSdk = 37
-        versionCode = 25
-        versionName = "0.4.0"
+        versionCode = 26
+        versionName = "0.4.1"
     }
 
     signingConfigs {
@@ -70,6 +71,15 @@ android {
             if (canSign) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+    }
+
+    // 内置 PTY 工具：编译 src/main/cpp/shpty.c 为可执行文件，
+    // 产出的 libshpty.so 会随 APK 安装到 nativeLibraryDir，开箱即用
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 
