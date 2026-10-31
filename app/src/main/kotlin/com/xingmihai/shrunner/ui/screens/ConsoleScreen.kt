@@ -69,6 +69,7 @@ fun ConsoleScreen(
     val state by ShellEngine.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    var input by remember { mutableStateOf("") }
 
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
@@ -150,6 +151,7 @@ fun ConsoleScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .weight(1f)
                 .background(TerminalBackground)
                 .padding(8.dp)
         ) {
@@ -180,6 +182,44 @@ fun ConsoleScreen(
                     }
                 }
             }
+        }
+
+        // 交互式脚本输入行：脚本在等输入时，在这里打字回车即可
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("脚本在等输入？在这里输入后回车") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onSend = {
+                        if (input.isNotBlank()) {
+                            val ok = com.xingmihai.shrunner.engine.ShellEngine.sendInput(input)
+                            if (ok) {
+                                ShellEngine.appendEcho(input)
+                                input = ""
+                            }
+                        }
+                    }
+                )
+            )
+            Button(
+                onClick = {
+                    if (input.isNotBlank()) {
+                        val ok = com.xingmihai.shrunner.engine.ShellEngine.sendInput(input)
+                        if (ok) {
+                            ShellEngine.appendEcho(input)
+                            input = ""
+                        }
+                    }
+                },
+                modifier = Modifier.padding(start = 8.dp)
+            ) { Text("发送") }
         }
     }
 }

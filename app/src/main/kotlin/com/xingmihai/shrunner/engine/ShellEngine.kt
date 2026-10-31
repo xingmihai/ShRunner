@@ -53,6 +53,30 @@ object ShellEngine {
     @Volatile
     private var currentProcess: Process? = null
 
+    @Volatile
+    private var currentSession: RootSession? = null
+
+    /** 把用户输入送给正在运行的脚本；返回是否送达。 */
+    fun sendInput(text: String): Boolean {
+        // 持久 root shell 会话优先
+        currentSession?.let { return it.sendInput(text) }
+        val process = currentProcess ?: return false
+        return runCatching {
+            process.outputStream.bufferedWriter().use { w ->
+                w.write(text)
+                if (!text.endsWith("\n")) w.write("\n")
+                w.flush()
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    /** 把用户送进去的输入回显到终端，看起来更像正常交互。 */
+    fun appendEcho(text: String) = append(text, Stream.SYSTEM)
+
+    /** 当前是否处于可接受输入的运行状态。 */
+    fun isRunning(): Boolean = _state.value is RunState.Running
+
     private val _lines = MutableStateFlow<List<OutputLine>>(emptyList())
     val lines: StateFlow<List<OutputLine>> = _lines.asStateFlow()
 
@@ -214,6 +238,7 @@ object ShellEngine {
             return null
         }
         appendSystem("[ShRunner] 启用持久 root shell：${session.info()}，在 shell 内执行脚本")
+        currentSession = session
         return try {
             val command = buildList {
                 add(shell)
@@ -223,6 +248,7 @@ object ShellEngine {
             val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
             session.exec(command, timeout) { line -> if (line.isNotEmpty()) append(line, Stream.STDOUT) }
         } finally {
+            currentSession = null
             session.close()
         }
     }

@@ -98,6 +98,14 @@ class RootSession private constructor(
         }
     }
 
+    /** 把用户输入写进正在运行的脚本（交互式脚本用）。 */
+    fun sendInput(text: String): Boolean = runCatching {
+        writer.write(text)
+        if (!text.endsWith("\n")) writer.write("\n")
+        writer.flush()
+        true
+    }.getOrDefault(false)
+
     fun close() {
         alive = false
         runCatching {
