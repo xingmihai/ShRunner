@@ -107,9 +107,14 @@ jobs:
           {
             echo "== APK 内置 PTY 工具检查 =="
             unzip -l "$APK" | grep -E "lib/.*\.so" || echo "未找到任何 .so"
-            echo "---"
-            unzip -l "$APK" | grep -i "shpty" && echo "shpty 已打包" || echo "shpty 缺失"
           } | tee ci-logs/pty.log
+          # 没打包进去就让这一步失败，避免悄悄发布一个缺 PTY 的包
+          if unzip -l "$APK" | grep -q "libshpty.so"; then
+            echo "shpty 已打包" | tee -a ci-logs/pty.log
+          else
+            echo "shpty 缺失" | tee -a ci-logs/pty.log
+            exit 1
+          fi
 
       - name: Verify signature
         if: steps.apkbuild.outcome == 'success'
