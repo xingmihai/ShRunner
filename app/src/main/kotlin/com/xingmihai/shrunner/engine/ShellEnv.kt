@@ -271,15 +271,15 @@ object ShellEnv {
         return out
     }
 
+    /** 同步取一条命令的输出，用于诊断这种非协程场景。 */
     private fun runBlockingSession(session: RootSession, cmd: String): List<String>? {
         var result: List<String>? = null
-        val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             result = session.exec(cmd, 6000)
+            latch.countDown()
         }
-        val start = System.currentTimeMillis()
-        while (job.isActive && System.currentTimeMillis() - start < 8000) {
-            Thread.sleep(50)
-        }
+        runCatching { latch.await(8, java.util.concurrent.TimeUnit.SECONDS) }
         return result
     }
 
