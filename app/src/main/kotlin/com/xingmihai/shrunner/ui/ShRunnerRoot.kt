@@ -78,9 +78,14 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                 scriptId = entry.id,
                 scriptName = entry.name,
                 scriptPath = entry.file.absolutePath,
-                workDir = repo.directory().absolutePath,
+                // 默认用脚本所在目录：很多脚本按相对路径读写配套文件，
+                // 工作目录不对会导致它读不到文件、拿到空值而崩溃
+                workDir = runPrefs.workDir.ifBlank { entry.file.parentFile?.absolutePath }
+                    ?: repo.directory().absolutePath,
                 useRoot = useRoot,
-                env = runPrefs.resolveEnv()
+                env = runPrefs.resolveEnv(),
+                dumpEnv = runPrefs.dumpEnv,
+                autoAnswers = runPrefs.answers()
             )
         )
         tab = ShTab.CONSOLE

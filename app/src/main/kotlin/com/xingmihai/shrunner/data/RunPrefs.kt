@@ -21,6 +21,26 @@ class RunPrefs private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_SKIP_UPDATE, false)
         set(value) = prefs.edit { putBoolean(KEY_SKIP_UPDATE, value) }
 
+    /** 自定义工作目录，留空表示用脚本所在目录。 */
+    var workDir: String
+        get() = prefs.getString(KEY_WORK_DIR, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_WORK_DIR, value) }
+
+    /** 执行前把环境变量打印到输出区，便于排查。 */
+    var dumpEnv: Boolean
+        get() = prefs.getBoolean(KEY_DUMP_ENV, false)
+        set(value) = prefs.edit { putBoolean(KEY_DUMP_ENV, value) }
+
+    /** 自动应答：一行一个，脚本提问时按顺序自动填入。 */
+    var autoAnswers: String
+        get() = prefs.getString(KEY_AUTO_ANSWERS, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_AUTO_ANSWERS, value) }
+
+    fun answers(): List<String> = autoAnswers.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toList()
+
     /** 是否把 stdin 固定接空（避免脚本卡在等输入）。 */
     var closeStdin: Boolean
         get() = prefs.getBoolean(KEY_CLOSE_STDIN, false)
@@ -54,6 +74,9 @@ class RunPrefs private constructor(context: Context) {
         private const val KEY_CUSTOM_ENV = "custom_env"
         private const val KEY_SKIP_UPDATE = "skip_update"
         private const val KEY_CLOSE_STDIN = "close_stdin"
+        private const val KEY_WORK_DIR = "work_dir"
+        private const val KEY_DUMP_ENV = "dump_env"
+        private const val KEY_AUTO_ANSWERS = "auto_answers"
 
         @Volatile
         private var instance: RunPrefs? = null

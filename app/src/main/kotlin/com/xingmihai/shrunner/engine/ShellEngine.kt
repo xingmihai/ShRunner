@@ -31,7 +31,9 @@ data class RunRequest(
     val workDir: String? = null,
     val env: Map<String, String> = emptyMap(),
     val useRoot: Boolean = false,
-    val timeoutMs: Long = 0L // 0 表示不限制
+    val timeoutMs: Long = 0L, // 0 表示不限制
+    val dumpEnv: Boolean = false,
+    val autoAnswers: List<String> = emptyList()
 )
 
 /**
@@ -201,6 +203,10 @@ object ShellEngine {
         appendSystem("[ShRunner] 实际命令：" + plan.display)
         val process = startProcess(request, plan)
         currentProcess = process
+        if (request.autoAnswers.isNotEmpty()) {
+            appendSystem("[ShRunner] 自动应答 ${request.autoAnswers.size} 项（普通模式按顺序输入）")
+            request.autoAnswers.forEach { sendInput(it) }
+        }
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
         var sawDecodeError = false
         var lines = 0
@@ -250,6 +256,19 @@ object ShellEngine {
                     extra.entries.joinToString(" ") { (k, v) -> "export $k=" + ShellEnv.singleQuote(v) },
                     8000
                 )
+            }
+            if (request.dumpEnv) {
+                session.exec("env | sort", 8000) { line ->
+                    if (line.isNotBlank()) appendSystem("  $line")
+                }
+            }
+            session.exec("cd " + ShellEnv.singleQuote(request.workDir ?: "/"), 8000)
+            // 自动应答：把预设答案依次喂进去，脚本再提问时会自动填上
+            request.autoAnswers.takeIf { it.isNotEmpty() }?.let { answers ->
+                appendSystem("[ShRunner] 自动应答 ${answers.size} 项：${answers.joinToString(" / ")}")
+                answers.forEach { answer ->
+                    session.sendInput(answer)
+                }
             }
             val command = buildList {
                 add(shell)
@@ -401,6 +420,14 @@ object ShellEngine {
             }
         }
         return process
+    }
+
+    /** 执行前把环境变量打印到输出区。 */
+    private fun dumpEnv(env: Map<String, String>) {
+        appendSystem("[ShRunner] 执行环境：")
+        env.entries.sortedBy { it.key }.forEach { (k, v) ->
+            appendSystem("  $k=$v")
+        }
     }
 
     /** 手动停止当前执行。 */

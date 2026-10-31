@@ -35,6 +35,9 @@ fun EnvScreen(prefs: RunPrefs, modifier: Modifier = Modifier) {
     var envText by remember { mutableStateOf(prefs.customEnv) }
     var skipUpdate by remember { mutableStateOf(prefs.skipUpdateCheck) }
     var closeStdin by remember { mutableStateOf(prefs.closeStdin) }
+    var workDir by remember { mutableStateOf(prefs.workDir) }
+    var dumpEnv by remember { mutableStateOf(prefs.dumpEnv) }
+    var answers by remember { mutableStateOf(prefs.autoAnswers) }
 
     Column(
         modifier = modifier
@@ -76,6 +79,58 @@ fun EnvScreen(prefs: RunPrefs, modifier: Modifier = Modifier) {
         Text(
             "让脚本读到的输入恒为空。脚本不需要交互、却一直卡在等待输入时打开。",
             style = MaterialTheme.typography.bodySmall
+        )
+
+        HorizontalDivider()
+
+        Text("工作目录", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "留空表示用脚本所在目录。脚本按相对路径读写配套文件时，目录不对会导致它读不到内容。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        OutlinedTextField(
+            value = workDir,
+            onValueChange = { workDir = it; prefs.workDir = it },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            singleLine = true,
+            placeholder = { Text("留空 = 脚本所在目录", fontSize = 12.sp) }
+        )
+
+        HorizontalDivider()
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "执行前打印环境",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Switch(
+                checked = dumpEnv,
+                onCheckedChange = { dumpEnv = it; prefs.dumpEnv = it }
+            )
+        }
+        Text(
+            "把脚本实际拿到的环境变量全部打印出来，用于确认配置是否生效。",
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        HorizontalDivider()
+
+        Text("自动应答", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "一行一个，按顺序自动回答脚本的提问。例如填 1 可自动选择「中文」。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        OutlinedTextField(
+            value = answers,
+            onValueChange = { answers = it; prefs.autoAnswers = it },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            minLines = 3,
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp
+            ),
+            placeholder = { Text("1", fontSize = 12.sp) }
         )
 
         HorizontalDivider()
