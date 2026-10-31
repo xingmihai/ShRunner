@@ -155,9 +155,14 @@ object ShellEngine {
             return ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
         }
         val probe = ShellEnv.probeRoot()
-        val su = probe.suPath ?: error("未找到可用的 su，无法以 root 执行")
-        val mode = probe.mode ?: error("没有可用的 su 调用形式")
-        return ShellEnv.buildCommand(mode, su, shell, scriptPath, request.args)
+        if (!probe.ok || probe.suPath == null || probe.mode == null) {
+            // root 探测没通过就降级为普通执行，至少脚本能跑起来
+            appendSystem("[ShRunner] 已回退为普通（非 root）执行")
+            val argv = mutableListOf(shell, scriptPath)
+            argv.addAll(request.args)
+            return ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
+        }
+        return ShellEnv.buildCommand(probe.mode, probe.suPath, shell, scriptPath, request.args)
     }
 
     private fun startProcess(request: RunRequest, scriptPath: String): Process {

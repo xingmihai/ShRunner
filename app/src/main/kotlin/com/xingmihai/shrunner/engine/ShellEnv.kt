@@ -65,6 +65,27 @@ object ShellEnv {
     @Volatile
     var preferredMode: SuMode? = null   // 用户在界面上手动指定
 
+    @Volatile
+    private var stageDir: File? = null
+
+    /** 由 Application 注入，用于确定暂存目录（应用私有目录，一定能写）。 */
+    fun init(context: android.content.Context) {
+        runCatching {
+            val dir = File(context.filesDir, "scripts/.stage")
+            dir.mkdirs()
+            stageDir = dir
+        }
+    }
+
+    private fun ensureStageDir(): File? {
+        stageDir?.let { return it }
+        runCatching {
+            val dir = File("/data/local/tmp").takeIf { it.isDirectory && it.canWrite() }
+            if (dir != null) stageDir = dir
+        }
+        return stageDir
+    }
+
     fun shellPath(): String {
         val candidates = listOf("/system/bin/sh", "/bin/sh", "/system/bin/mksh")
         return candidates.firstOrNull { File(it).exists() } ?: "/system/bin/sh"
@@ -96,15 +117,15 @@ object ShellEnv {
 
     private fun probeRootInternal(): RootProbe {
         val probeFile = runCatching {
-            // 探针放在 /data/local/tmp，root 一定可读可执行，排除权限干扰
-            val dir = File("/data/local/tmp").takeIf { it.isDirectory }
+            // 探针必须落在应用自己能写的目录里（/data/local/tmp 在 Android 10+ 对应用不可写）
+            val dir = ensureStageDir()
                 ?: File(System.getProperty("java.io.tmpdir") ?: "/data/local/tmp")
             val f = File(dir, "shrunner_probe.sh")
             f.writeText("#!/system/bin/sh\necho SHRUNNER_PROBE_OK\nid\nexit 0\n")
             f.setExecutable(true, false)
             f.setReadable(true, false)
             f
-        }.getOrNull() ?: return RootProbe(false, null, null, "无法创建探针脚本")
+        }.getOrNull() ?: return RootProbe(false, null, null, "无法创建探针脚本（暂存目录不可写）")
 
         val tried = mutableListOf<String>()
         val modes = preferredMode?.let { listOf(it) } ?: SuMode.entries
@@ -181,7 +202,7 @@ object ShellEnv {
      * 3. 修掉 Windows 换行符（\r\n 会让 sh 报 not found）和 #!/bin/bash 这类不存在的解释器。
      */
     fun stageScript(source: File, id: String): File {
-        val stageDir = File(source.parentFile, ".stage").apply { mkdirs() }
+        val stageDir = (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }
         val target = File(stageDir, asciiName(id) + ".sh")
         target.writeText(normalize(source.readText()))
         runCatching { target.setExecutable(true, false) }
