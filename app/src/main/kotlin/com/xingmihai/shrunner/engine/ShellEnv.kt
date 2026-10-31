@@ -217,15 +217,16 @@ object ShellEnv {
         if (viaPath != null) return viaPath
 
         // 2) 已知位置逐个探测（含 KernelSU / APatch / Magisk 提供的路径）
+        // 用 ls 批量过滤存在的路径，避免在 shell 命令里写变量（省掉一层转义）
         val paths = listOf(
             "/system/bin/script", "/system/xbin/script", "/sbin/script",
             "/vendor/bin/script", "/product/bin/script", "/system_ext/bin/script",
             "/data/adb/ksu/bin/script", "/data/adb/ap/bin/script"
         )
-        val pathCmd = "for p in " + paths.joinToString(" ") +
-            "; do if [ -x "\$p" ]; then echo "\$p"; break; fi; done"
-        val viaFile = runShort(listOf(shell, "-c", pathCmd), 6).first
-            .lineSequence().map { it.trim() }.firstOrNull { it.startsWith("/") }
+        val viaFile = runShort(
+            listOf(shell, "-c", "ls -1 " + paths.joinToString(" ") + " 2>/dev/null | head -n 1"),
+            6
+        ).first.trim().takeIf { it.startsWith("/") }
         if (viaFile != null) return viaFile
 
         // 3) busybox / toybox 以 applet 形式提供 script
@@ -235,13 +236,23 @@ object ShellEnv {
             "/system/bin/busybox", "/system/xbin/busybox", "/sbin/busybox",
             "/system/bin/toybox", "/system/xbin/toybox"
         )
-        val boxCmd = "for b in " + boxes.joinToString(" ") +
-            "; do if [ -x "\$b" ]; then " +
-            "if "\$b" --list 2>/dev/null | grep -qx script; then echo "\$b script"; break; fi; " +
-            "if "\$b" script --help >/dev/null 2>&1; then echo "\$b script"; break; fi; " +
-            "fi; done"
-        return runShort(listOf(shell, "-c", boxCmd), 8).first
-            .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+        val box = runShort(
+            listOf(shell, "-c", "ls -1 " + boxes.joinToString(" ") + " 2>/dev/null | head -n 1"),
+            6
+        ).first.trim().takeIf { it.startsWith("/") }
+        if (box != null) {
+            val has = runShort(
+                listOf(shell, "-c", box + " --list 2>/dev/null | grep -qx script && echo yes"),
+                8
+            ).first
+            if (has.contains("yes")) return box + " script"
+            val runnable = runShort(
+                listOf(shell, "-c", box + " script --help >/dev/null 2>&1 && echo yes"),
+                8
+            ).first
+            if (runnable.contains("yes")) return box + " script"
+        }
+        return null
     }
 
     /** 用 PTY 包装一条命令；返回 null 表示没有可用工具。 */
