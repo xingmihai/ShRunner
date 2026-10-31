@@ -49,6 +49,7 @@ fun SettingsScreen(
     var envText by remember { mutableStateOf(prefs.customEnv) }
     var dumpEnv by remember { mutableStateOf(prefs.dumpEnv) }
     var verbose by remember { mutableStateOf(prefs.verbose) }
+    var globalAnswers by remember { mutableStateOf(prefs.autoAnswers) }
     var advanced by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var netResult by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -84,6 +85,22 @@ fun SettingsScreen(
             minLines = 4,
             textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
             placeholder = { Text("http_proxy=http://host:port", fontSize = 12.sp) }
+        )
+
+        HorizontalDivider()
+
+        Text("全局自动应答", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "脚本没有单独配置时使用。一行一个，按顺序回答每次提问。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        OutlinedTextField(
+            value = globalAnswers,
+            onValueChange = { globalAnswers = it; prefs.autoAnswers = it },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+            placeholder = { Text("y", fontSize = 12.sp) }
         )
 
         HorizontalDivider()

@@ -224,15 +224,34 @@ object ShellEngine {
                 if (queue.isNotEmpty()) {
                     appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
                 }
+                // 防抖：提问常不带换行，逐字符回调下必须等文本稳定再应答，
+                // 否则「安全警告:」这种中途出现的冒号会被误判成提问
+                val lastText = java.util.concurrent.atomic.AtomicReference("")
+                val lastChangeAt = java.util.concurrent.atomic.AtomicLong(0L)
+                val answered = java.util.concurrent.atomic.AtomicReference("")
                 answerWatcher = { text ->
-                    val answer = queue.peek()
-                    if (answer != null && looksLikePrompt(text)) {
-                        queue.poll()
-                        if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
+                    val now = System.currentTimeMillis()
+                    if (text != lastText.get()) {
+                        lastText.set(text)
+                        lastChangeAt.set(now)
+                    } else if (now - lastChangeAt.get() >= 400 && answered.get() != text) {
+                        val kind = promptKind(text)
+                        val answer = queue.peek()
+                        if (kind != null && answer != null) {
+                            if (kind == PromptKind.YN && !answer.trim().equals("y", true) &&
+                                !answer.trim().equals("n", true)
+                            ) {
+                                answered.set(text)
+                                appendSystem("提问是 y/n，但预设答案为「$answer」，未发送。请改填 y 或 n")
+                            } else {
+                                answered.set(text)
+                                queue.poll()
+                                if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
+                            }
+                        }
                     }
                 }
 
-                val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
                 val code = session.exec(
                     command = command,
                     timeoutMs = timeout,
@@ -366,18 +385,36 @@ object ShellEngine {
 
     fun appendEcho(text: String) = append(text, Stream.SYSTEM)
 
-    private fun looksLikePrompt(line: String): Boolean {
-        val text = line.trim()
-        if (text.isEmpty()) return false
-        val patterns = listOf(
-            Regex("""\[\d+\s*/\s*\d+\].*[:：]\s*$"""),
-            Regex("""[:：]\s*$"""),
-            Regex("""\?\s*$"""),
-            Regex("""\(y/n\)|\(Y/N\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
-            Regex("""(y|Y)(或者|或)/(n|N)"""),
-            Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose""")
+    private enum class PromptKind { YN, CHOICE, TEXT }
+
+    /**
+     * 判断一段输出是否真的在等输入。
+     * 必须带明确的提问特征（y/n、?、请输入/选择、[1/2] 之类），
+     * 只以冒号结尾不算——脚本正文里「安全警告:」这种太常见。
+     */
+    private fun promptKind(raw: String): PromptKind? {
+        val text = raw.trim()
+        if (text.isEmpty()) return null
+        val yn = listOf(
+            Regex("""\(y\s*/\s*n\)""", RegexOption.IGNORE_CASE),
+            Regex("""\[y\s*/\s*N\]""", RegexOption.IGNORE_CASE),
+            Regex("""(y|Y)\s*(或者|或)\s*(n|N)"""),
+            Regex("""是否\s*(继续|确认|执行|安装|删除)""")
         )
-        return patterns.any { it.containsMatchIn(text) }
+        if (yn.any { it.containsMatchIn(text) }) return PromptKind.YN
+
+        val choice = listOf(
+            Regex("""\[\d+\s*/\s*\d+\]"""),
+            Regex("""请输入\s*\d+""")
+        )
+        if (choice.any { it.containsMatchIn(text) }) return PromptKind.CHOICE
+
+        val textPrompt = listOf(
+            Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose|Enter your"""),
+            Regex("""[?？]\s*$"""),
+            Regex("""[:：]\s*$""")
+        )
+        return if (textPrompt.any { it.containsMatchIn(text) }) PromptKind.TEXT else null
     }
 
     private fun exitHint(code: Int): String = when (code) {
