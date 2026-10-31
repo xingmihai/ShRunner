@@ -42,7 +42,7 @@ class ScriptRepository private constructor(private val app: Application) {
                 sizeBytes = file.length(),
                 favorite = readMeta(id).optBoolean(KEY_FAVORITE, false),
                 lastRunAt = readMeta(id).optLong(KEY_LAST_RUN, 0L),
-                lastExitCode = readMeta(id).opt(KEY_EXIT_CODE)
+                lastExitCode = readMeta(id).optIntOrNull(KEY_EXIT_CODE)
             )
         }
         ?.sortedWith(compareByDescending<ScriptEntry> { it.favorite }.thenByDescending { it.updatedAt })
@@ -129,7 +129,7 @@ class ScriptRepository private constructor(private val app: Application) {
         prefs.edit().putString(id, meta.toString()).apply()
     }
 
-    private fun org.json.JSONObject.opt(key: String): Int? =
+    private fun org.json.JSONObject.optIntOrNull(key: String): Int? =
         if (has(key)) getInt(key) else null
 
     companion object {

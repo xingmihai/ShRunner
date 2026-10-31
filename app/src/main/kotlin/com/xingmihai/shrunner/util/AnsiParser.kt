@@ -96,7 +96,7 @@ fun highlightShell(source: String): AnnotatedString {
                         pushStyle(SpanStyle(color = Color(0xFF9CDCFE)))
                         append(token.ifEmpty { "$" })
                         pop()
-                        column += token.length.ifEmpty { 1 }
+                        column += if (token.isEmpty()) 1 else token.length
                     }
                     else -> {
                         val token = rest.takeWhile { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' || it == '/' }
@@ -108,7 +108,7 @@ fun highlightShell(source: String): AnnotatedString {
                         pushStyle(style)
                         append(token.ifEmpty { line[column].toString() })
                         pop()
-                        column += token.length.ifEmpty { 1 }
+                        column += if (token.isEmpty()) 1 else token.length
                     }
                 }
             }
