@@ -1,5 +1,6 @@
 package com.xingmihai.shrunner.ui
 
+import com.xingmihai.shrunner.engine.ShellEnv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import android.app.Application

@@ -36,7 +36,7 @@ object NetCheck {
             }.getOrDefault(false)
             val cost = System.currentTimeMillis() - start
             if (ok) reachable++
-            out += "$host:${'$'}{port} → ${'$'}{if (ok) "通" else "不通"}（${'$'}{cost}ms）"
+            out += "$host:$port → " + (if (ok) "通" else "不通") + "（${cost}ms）"
         }
         out += "结果：$reachable / ${TARGETS.size} 可达"
         out += when {
