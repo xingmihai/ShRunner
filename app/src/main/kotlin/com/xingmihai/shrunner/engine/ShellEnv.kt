@@ -1,11 +1,10 @@
 package com.xingmihai.shrunner.engine
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import android.content.Context
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-/** 设备 shell 环境探测：sh 路径、root 方案与调用形式、busybox/toybox、脚本暂存。 */
+/** 设备 shell 环境探测、执行环境构造与脚本暂存。 */
 object ShellEnv {
 
     private val SU_CANDIDATES = listOf(
@@ -22,66 +21,34 @@ object ShellEnv {
         "/system/bin/toybox",
         "/system/bin/busybox",
         "/system/xbin/busybox",
-        "/sbin/busybox",
         "/data/adb/magisk/busybox"
     )
 
-    /**
-     * 不同的 su 调用形式。
-     * 有些设备（尤其国内一键 root / 部分厂商内置 su）的 `-c` 参数解析是坏的：
-     * 它会对参数做解码再执行，于是出现 `gzip: not gzip / Cannot decompress` 这类报错。
-     * 因此提供多种形式，自动探测出能真正跑通脚本的那一种。
-     */
+    /** root 执行方式。SESSION 为首选：脚本路径不经 su 参数解析，无体积上限。 */
     enum class SuMode(val label: String) {
-        /**
-         * `su -c "脚本.gz"` —— 针对会把参数当压缩包解压再执行的 su。
-         * 这类 su 遇到明文脚本会报 `gzip: not gzip / Cannot decompress`，
-         * 那就直接给它 gzip 格式。
-         */
-        SU_C_GZIP("su -c \"脚本.gz\"（压缩传入，推荐）"),
-
-        /** `su -c "sh script args"` —— 最常见 */
+        SESSION("持久 root shell"),
         SU_C_SH("su -c \"sh 脚本\""),
-
-        /** `su 0 "sh script args"` —— 部分 su 只认 uid 形式 */
         SU_0_SH("su 0 \"sh 脚本\""),
-
-        /** `su -c "script args"` —— 直接跑脚本，靠 shebang */
-        SU_C_DIRECT("su -c \"脚本\""),
-
-        /** `su -c sh 脚本`（不带引号），专治把引号一起吃进去的 su */
-        SU_C_SH_PLAIN("su -c sh 脚本（无引号）"),
-
-        /** `su -s sh -c "script args"` —— 显式指定 shell */
-        SU_S_C("su -s sh -c \"脚本\""),
-
-        /** 不带任何参数，把命令写进 su 的 stdin —— 彻底绕开坏掉的 -c 解析 */
-        SU_STDIN("su ← stdin（推荐，兼容性最好）");
-
-        companion object {
-            fun of(name: String?): SuMode? = entries.firstOrNull { it.name == name }
-        }
+        SU_STDIN("su ← stdin")
     }
 
     data class RootProbe(
         val ok: Boolean,
         val suPath: String?,
         val mode: SuMode?,
-        val detail: String,
-        val tried: List<String> = emptyList()   // 每种尝试的失败原因，便于排查
+        val detail: String
     )
 
     @Volatile
     private var cachedProbe: RootProbe? = null
 
     @Volatile
-    var preferredMode: SuMode? = null   // 用户在界面上手动指定
+    var preferredMode: SuMode? = null
 
     @Volatile
     private var stageDir: File? = null
 
-    /** 由 Application 注入，用于确定暂存目录（应用私有目录，一定能写）。 */
-    fun init(context: android.content.Context) {
+    fun init(context: Context) {
         runCatching {
             val dir = File(context.filesDir, "scripts/.stage")
             dir.mkdirs()
@@ -109,19 +76,15 @@ object ShellEnv {
 
     fun toolboxPath(): String? = TOOLBOX_CANDIDATES.firstOrNull { File(it).exists() }
 
-    fun toolboxSummary(): String = toolboxPath() ?: "无（命令集以系统 toybox 为准）"
+    fun toolboxSummary(): String = toolboxPath()?.substringAfterLast('/') ?: "无"
 
-    fun defaultPath(): String {
-        val base = listOf(
-            "/system/bin", "/system/xbin", "/vendor/bin", "/sbin", "/sbin/bin",
-            "/product/bin", "/apex/com.android.runtime/bin", "/apex/com.android.art/bin",
-            "/odm/bin", "/system_ext/bin"
-        ).joinToString(":")
-        val extra = listOfNotNull(toolboxPath()).joinToString(":") { File(it).parent ?: "" }
-        return if (extra.isBlank()) base else "$base:$extra"
-    }
+    fun defaultPath(): String = listOf(
+        "/system/bin", "/system/xbin", "/vendor/bin", "/sbin", "/sbin/bin",
+        "/product/bin", "/apex/com.android.runtime/bin", "/apex/com.android.art/bin",
+        "/odm/bin", "/system_ext/bin"
+    ).joinToString(":")
 
-    /** 执行脚本时的基础环境。缺了这些，脚本里的原生程序容易取不到值而崩溃。 */
+    /** 执行脚本时的基础环境：缺了这些，脚本里的原生程序容易取不到值而崩溃。 */
     fun baseEnv(): Map<String, String> {
         val env = linkedMapOf<String, String>()
         env["PATH"] = defaultPath()
@@ -140,20 +103,18 @@ object ShellEnv {
         env["ANDROID_ROOT"] = "/system"
         env["ANDROID_STORAGE"] = "/storage"
         env["EXTERNAL_STORAGE"] = "/sdcard"
-        env["LD_LIBRARY_PATH"] = listOf(
-            "/system/lib64", "/vendor/lib64", "/apex/com.android.runtime/lib64"
-        ).joinToString(":")
+        env["LD_LIBRARY_PATH"] = "/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64"
         return env
     }
 
-    /** 把基础环境写成 shell 的 export 语句，供持久 root shell 首行执行。 */
+    /** 供持久 root shell 首行执行的 export 语句。 */
     fun envPrologue(): String = baseEnv().entries.joinToString(" ") { (k, v) ->
         "export $k=" + singleQuote(v)
     }
 
     /**
-     * 端到端探测 root：真的跑一个探针脚本，只有输出里出现标记才算可用。
-     * 只跑 `su -c id` 会被这类坏 su 骗过（uid=0 正常但传脚本就炸）。
+     * 探测 root 是否真的可用。
+     * 优先验证持久 shell（大脚本唯一可行的路径），再退回 `su -c id`。
      */
     fun probeRoot(force: Boolean = false): RootProbe {
         if (!force) cachedProbe?.let { return it }
@@ -162,312 +123,167 @@ object ShellEnv {
     }
 
     private fun probeRootInternal(): RootProbe {
-        val probeFile = runCatching {
-            // 探针必须落在应用自己能写的目录里（/data/local/tmp 在 Android 10+ 对应用不可写）
-            val dir = ensureStageDir()
-                ?: File(System.getProperty("java.io.tmpdir") ?: "/data/local/tmp")
-            val f = File(dir, "shrunner_probe.sh")
-            f.writeText("#!/system/bin/sh\necho SHRUNNER_PROBE_OK\nid\nexit 0\n")
-            f.setExecutable(true, false)
-            f.setReadable(true, false)
-            f
-        }.getOrNull() ?: return RootProbe(false, null, null, "无法创建探针脚本（暂存目录不可写）")
-
-        val tried = mutableListOf<String>()
-        val modes = preferredMode?.let { listOf(it) } ?: SuMode.entries
-
+        val modes = preferredMode?.let { listOf(it) } ?: listOf(SuMode.SESSION, SuMode.SU_C_SH)
         for (su in SU_CANDIDATES) {
             if (!File(su).exists()) continue
             for (mode in modes) {
-                val result = runCommand(
-                    buildCommand(mode, su, shellPath(), probeFile.absolutePath, emptyList())
-                )
-                val output = result.first
-                if (output.contains("SHRUNNER_PROBE_OK")) {
-                    return RootProbe(true, su, mode, "已验证可执行", tried)
-                }
-                val reason = output.trim().lineSequence().lastOrNull { it.isNotBlank() }
-                    ?.take(60) ?: "退出码 ${result.second}"
-                tried.add("${su.substringAfterLast('/')} · ${mode.label} → $reason")
-            }
-        }
-        return RootProbe(false, suPath(), null, tried.lastOrNull() ?: "所有 su 形式均无法执行脚本", tried)
-    }
-
-    /** 返回 (stdout, 是否需要通过 stdin 写入的命令, exitCode) */
-    data class CommandPlan(
-        val argv: List<String>,
-        val stdin: String?,   // 非空表示需要写入进程 stdin
-        val display: String   // 展示用
-    )
-
-    fun buildCommand(
-        mode: SuMode,
-        su: String,
-        shell: String,
-        scriptPath: String,
-        args: List<String>
-    ): CommandPlan {
-        val quotedScript = singleQuote(scriptPath)
-        val quotedArgs = args.joinToString(" ") { singleQuote(it) }
-        return when (mode) {
-            SuMode.SU_C_GZIP -> {
-                val payload = quotedScript + quotedArgs
-                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
-            }
-            SuMode.SU_C_SH -> {
-                val payload = "$shell $quotedScript$quotedArgs"
-                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
-            }
-            SuMode.SU_C_SH_PLAIN -> {
-                val payload = "$shell $scriptPath$quotedArgs"
-                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
-            }
-            SuMode.SU_0_SH -> {
-                val payload = "$shell $quotedScript$quotedArgs"
-                CommandPlan(listOf(su, "0", payload), null, "$su 0 '$payload'")
-            }
-            SuMode.SU_C_DIRECT -> {
-                val payload = "$quotedScript$quotedArgs"
-                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
-            }
-            SuMode.SU_S_C -> {
-                val payload = "$quotedScript$quotedArgs"
-                CommandPlan(listOf(su, "-s", shell, "-c", payload), null, "$su -s $shell -c '$payload'")
-            }
-            SuMode.SU_STDIN -> {
-                val payload = "$shell $quotedScript$quotedArgs\nexit\n"
-                CommandPlan(listOf(su), payload, "$payload | $su")
-            }
-        }
-    }
-
-    /**
-     * root 诊断：逐个验证 su 到底能吃什么，把结果打回输出区。
-     * 用于定位「su -c 传脚本就报 gzip / Cannot decompress」这类设备专属问题。
-     */
-    fun diagnose(scriptPath: String?): List<String> {
-        val out = mutableListOf<String>()
-        val shell = shellPath()
-        val su = suPath()
-        out += "== ShRunner root 诊断 =="
-        out += "sh: $shell"
-        out += "su: ${su ?: "未找到"}"
-
-        if (su != null) {
-            runCatching {
-                val p = ProcessBuilder(listOf(shell, "-c", "ls -l $su")).redirectErrorStream(true).start()
-                val t = p.inputStream.bufferedReader().readText()
-                p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-                out += "su 文件信息: ${t.trim().lineSequence().firstOrNull() ?: "无输出"}"
-            }
-        }
-
-        // 1) su 能否执行一条普通短命令
-        if (su != null) {
-            val r = runShort(listOf(su, "-c", "echo DIAG_ECHO_OK"))
-            out += if (r.first.contains("DIAG_ECHO_OK")) {
-                "① su -c 'echo' → 成功"
-            } else {
-                "① su -c 'echo' → 失败：${summarize(r)}"
-            }
-        }
-
-        // 2) 非 root 直接执行真实脚本，排除脚本自身问题
-        scriptPath?.let { path ->
-            val r = runShort(listOf(shell, path), timeoutSec = 20)
-            out += "② 非 root 执行脚本 → 退出码 ${r.second}｜${summarize(r)}"
-        }
-
-        // 3) 不同体积的探针脚本，找出 su 的容量上限
-        if (su != null) {
-            val dir = ensureStageDir()
-            if (dir != null) {
-                for (sizeKb in listOf(1, 64, 512, 4096)) {
-                    val f = runCatching {
-                        val file = File(dir, "diag_${sizeKb}k.sh")
-                        val body = "#!/system/bin/sh\necho DIAG_SIZE_OK_${sizeKb}K\n"
-                        file.writeText(body + ": > /dev/null\n" + "# ".repeat(1) + "pad\n".padEnd(2) +
-                            "#" + "x".repeat(sizeKb * 1024) + "\n")
-                        file.setExecutable(true, false)
-                        file
-                    }.getOrNull() ?: continue
-                    val r = runShort(listOf(su, "-c", "$shell ${f.absolutePath}"), timeoutSec = 20)
-                    out += if (r.first.contains("DIAG_SIZE_OK_${sizeKb}K")) {
-                        "③ ${sizeKb}KB 脚本 → 成功"
-                    } else {
-                        "③ ${sizeKb}KB 脚本 → 失败：${summarize(r)}"
+                val ok = when (mode) {
+                    SuMode.SESSION -> RootSession.open(su)?.let { session ->
+                        var out: String? = null
+                        session.exec("id", 6000) { line -> if (line.contains("uid=0")) out = line }
+                        session.close()
+                        out != null
+                    } ?: false
+                    else -> {
+                        val r = runShort(listOf(su, "-c", "echo SHRUNNER_OK"))
+                        r.first.contains("SHRUNNER_OK")
                     }
                 }
+                if (ok) return RootProbe(true, su, mode, "已验证")
             }
         }
-
-        // 4) 持久 root shell 是否可用
-        if (su != null) {
-            val session = RootSession.open(su)
-            out += if (session != null) {
-                val idOut = runBlockingSession(session, "id")
-                session.close()
-                "④ 持久 root shell → 可用｜id: ${idOut?.firstOrNull { it.contains("uid=") } ?: "无输出"}"
-            } else {
-                "④ 持久 root shell → 不可用"
-            }
-        }
-
-        out += "== 诊断结束 =="
-        return out
+        val su = suPath()
+        return RootProbe(false, su, null, if (su == null) "未找到 su" else "su 无法执行脚本")
     }
 
-    /** 同步取一条命令的输出，用于诊断这种非协程场景。 */
-    private fun runBlockingSession(session: RootSession, cmd: String): List<String>? {
-        val collected = java.util.Collections.synchronizedList(mutableListOf<String>())
-        var code: Int? = null
-        val latch = java.util.concurrent.CountDownLatch(1)
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            code = session.exec(cmd, 6000) { line -> if (line.isNotEmpty()) collected += line }
-            latch.countDown()
-        }
-        runCatching { latch.await(8, java.util.concurrent.TimeUnit.SECONDS) }
-        return if (code == null) null else collected.toList()
-    }
-
-    private fun summarize(pair: Pair<String, Int>): String {
-        val lines = pair.first.lineSequence().filter { it.isNotBlank() }.toList()
-        val last = lines.lastOrNull()?.take(70) ?: "无输出"
-        return "$last（退出码 ${pair.second}）"
-    }
-
-    /** 执行短命令并取回 (输出, 退出码)。 */
-    private fun runShort(cmd: List<String>, timeoutSec: Long = 8): Pair<String, Int> = runCatching {
-        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-        val text = process.inputStream.bufferedReader().readText()
-        val done = process.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
-        if (!done) process.destroy()
-        text to process.exitValue()
-    }.getOrDefault("" to -1)
-
-    /** 只读缓存，避免在 UI 线程起进程。 */
     fun cachedRoot(): RootProbe? = cachedProbe
 
     fun resetProbe() {
         cachedProbe = null
     }
 
-    /**
-     * 把脚本暂存为可执行的副本。
-     *
-     * 关键：**全程按字节处理，绝不整文件走 String**。
-     * 内嵌二进制数据（base64 payload、打包的压缩包等）的脚本一旦用 UTF-8 解码再编码，
-     * 无效字节会被替换成 U+FFFD，数据损坏，脚本里的解压步骤就会报
-     * `gzip: not gzip / Cannot decompress`。
-     *
-     * 只做两件最小改动（且都在字节层面）：
-     * 1. 首行 shebang 指向不存在的解释器时，替换为 #!/system/bin/sh；
-     * 2. 路径改为纯 ASCII（二进制内容本身完全不动）。
-     */
-    fun stageScript(source: File, id: String): File {
-        val stageDir = (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }
-        val target = File(stageDir, asciiName(id) + ".sh")
-        val bytes = source.readBytes()
-        val patched = fixShebang(bytes)
-        target.writeBytes(patched)
-        runCatching { target.setExecutable(true, false) }
-        runCatching { target.setReadable(true, false) }
-        return target
-    }
+    /** 返回 (输出, 退出码) 的短命令执行，带超时。 */
+    private fun runShort(cmd: List<String>, timeoutSec: Long = 8): Pair<String, Int> = runCatching {
+        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
+        val text = process.inputStream.bufferedReader().readText()
+        val done = process.waitFor(timeoutSec, TimeUnit.SECONDS)
+        if (!done) process.destroy()
+        text to process.exitValue()
+    }.getOrDefault("" to -1)
 
-    data class StageReport(
-        val sizeBytes: Long,
-        val sameSize: Boolean,
-        val isBinary: Boolean,
-        val shebang: String,
-        val shebangFixed: Boolean
+    data class CommandPlan(
+        val argv: List<String>,
+        val stdin: String?,
+        val display: String
     )
 
-    /** 暂存结果的体检报告，用于确认内容没被动过。 */
-    fun inspectStaged(staged: File, original: File): StageReport {
-        val origBytes = runCatching { original.readBytes() }.getOrNull()
-        val newBytes = runCatching { staged.readBytes() }.getOrNull()
-        val head = newBytes?.let { readShebang(it) } ?: ""
-        return StageReport(
-            sizeBytes = staged.length(),
-            sameSize = origBytes != null && newBytes != null && origBytes.size == newBytes.size,
-            isBinary = newBytes?.let { looksBinary(it) } ?: false,
-            shebang = head,
-            shebangFixed = head.startsWith("#!/system/bin/sh")
-        )
+    fun buildCommand(mode: SuMode, su: String, shell: String, scriptPath: String, args: List<String>): CommandPlan {
+        val quotedArgs = args.joinToString(" ") { singleQuote(it) }
+        return when (mode) {
+            SuMode.SU_C_SH -> {
+                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs"
+                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
+            }
+            SuMode.SU_0_SH -> {
+                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs"
+                CommandPlan(listOf(su, "0", payload), null, "$su 0 '$payload'")
+            }
+            SuMode.SU_STDIN -> {
+                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs\nexit\n"
+                CommandPlan(listOf(su), payload, "$shell $scriptPath | su")
+            }
+            SuMode.SESSION -> CommandPlan(emptyList(), null, "持久会话内执行")
+        }
     }
 
-    /** 首行 shebang 无效时替换；其余字节原样保留。 */
-    private fun fixShebang(bytes: ByteArray): ByteArray {
-        val firstLineEnd = bytes.indexOf(0x0A.toByte())
-        if (!(bytes.size >= 2 && bytes[0] == 0x23.toByte() && bytes[1] == 0x21.toByte())) {
-            return bytes   // 不以 #! 开头，原样不动
-        }
-        val end = if (firstLineEnd < 0) bytes.size else firstLineEnd
-        val shebang = String(bytes, 0, end, Charsets.UTF_8).trim()
-        val interp = shebang.removePrefix("#!").trim()
-        val valid = interp == "/system/bin/sh" || interp == "/bin/sh" ||
-            interp == "sh" || interp == "/system/bin/mksh"
-        if (valid) return bytes
-        val replacement = "#!/system/bin/sh".toByteArray(Charsets.UTF_8)
-        return replacement + bytes.copyOfRange(end, bytes.size)
-    }
-
-    private fun readShebang(bytes: ByteArray): String {
-        if (!(bytes.size >= 2 && bytes[0] == 0x23.toByte() && bytes[1] == 0x21.toByte())) {
-            return "无 shebang"
-        }
-        val end = bytes.indexOf(0x0A.toByte()).let { if (it < 0) bytes.size.coerceAtMost(60) else it }
-        return String(bytes, 0, end, Charsets.UTF_8).trim().take(60)
-    }
-
-    /** 粗略判断是否含二进制数据：出现 NUL 或大量非文本字节。 */
-    private fun looksBinary(bytes: ByteArray): Boolean {
-        val sample = bytes.copyOfRange(0, minOf(bytes.size, 65536))
-        var suspicious = 0
-        for (b in sample) {
-            val v = b.toInt() and 0xFF
-            if (v == 0x00) return true
-            if (v < 0x09 || (v > 0x0D && v < 0x20)) suspicious++
-        }
-        return suspicious > sample.size / 100   // 超过 1% 即视为二进制
-    }
-
-    /**
-     * 把脚本压缩为 gzip 版本，供「先解压再执行」的 su 使用。
-     * 这类 su 要求 -c 传入的文件是 gzip 格式，明文脚本会报 Cannot decompress。
-     */
-    fun gzip(source: File): File? = runCatching {
-        val dir = ensureStageDir() ?: source.parentFile ?: return null
-        val target = File(dir, source.nameWithoutExtension + ".sh.gz")
-        java.util.zip.GZIPOutputStream(target.outputStream()).use { gz ->
-            source.inputStream().use { it.copyTo(gz) }
-        }
-        target.setReadable(true, false)
-        target
-    }.getOrNull()
-
-    /** 该脚本对应的暂存目录（.stage），即被执行副本所在位置。 */
+    /** 该脚本对应的暂存目录，即被执行副本所在位置。 */
     fun stageDirOf(source: File): File =
         (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }
 
-    /** 取规范绝对路径，把 /data/user/0/... 归一为 /data/data/... */
     fun canonical(file: File): String =
         runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
 
     fun singleQuote(raw: String): String = "'" + raw.replace("'", "'\\''") + "'"
 
-    private fun normalize(text: String): String {
-        val unified = text.replace("\r\n", "\n").replace("\r", "\n")
-        val lines = unified.split("\n").toMutableList()
-        if (lines.isNotEmpty() && lines[0].startsWith("#!")) {
-            val interp = lines[0].removePrefix("#!").trim()
-            val valid = interp == "/system/bin/sh" || interp == "/bin/sh" ||
-                interp == "sh" || interp == "/system/bin/mksh"
-            if (!valid) lines[0] = "#!/system/bin/sh"
+    /**
+     * 是否必须暂存一份副本。
+     * 大脚本（10MB+）只要 shebang 正确、路径是 ASCII，就直接用原文件执行，
+     * 省掉一次全量拷贝。
+     */
+    fun needsStaging(file: File, useSession: Boolean): Boolean {
+        val header = ByteArray(256)
+        val read = runCatching {
+            file.inputStream().use { it.read(header) }
+        }.getOrDefault(-1)
+        if (read <= 0) return false
+        // shebang 缺失或无效 → 需要暂存修复
+        val hasValid = hasValidShebang(header, read)
+        if (!hasValid) return true
+        // 非 ASCII 路径：仅在不走持久会话时才需要改名（su 对非 ASCII 参数可能转码）
+        val asciiPath = file.absolutePath.all { it.code in 32..126 }
+        return !asciiPath && !useSession
+    }
+
+    /** 需要暂存时调用：流式拷贝 + 按需修复 shebang，避免整体入内存。 */
+    fun stageScript(source: File, id: String): File {
+        val dir = stageDirOf(source)
+        val target = File(dir, asciiName(id) + ".sh")
+        val header = ByteArray(256)
+        val read = runCatching { source.inputStream().use { it.read(header) } }.getOrDefault(-1)
+        val needFix = read > 0 && !hasValidShebang(header, read)
+
+        source.inputStream().use { input ->
+            target.outputStream().use { output ->
+                if (!needFix) {
+                    input.copyTo(output)
+                } else {
+                    // 跳过错误 shebang 首行，写入正确首行
+                    val first = ByteArray(read)
+                    System.arraycopy(header, 0, first, 0, read)
+                    val lineEnd = first.indexOf(0x0A.toByte()).let { if (it < 0) read else it + 1 }
+                    val rest = ByteArray(maxOf(0, read - lineEnd))
+                    System.arraycopy(first, lineEnd, rest, 0, rest.size)
+                    output.write("#!/system/bin/sh\n".toByteArray(Charsets.UTF_8))
+                    output.write(rest)
+                    input.copyTo(output)
+                }
+            }
         }
-        return lines.joinToString("\n")
+        runCatching { target.setExecutable(true, false) }
+        runCatching { target.setReadable(true, false) }
+        return target
+    }
+
+    data class ScriptStat(val sizeBytes: Long, val isBinary: Boolean, val shebang: String)
+
+    /** 轻量体检：只读前 64KB，大小用 length()，10MB 脚本也能瞬间完成。 */
+    fun stat(file: File): ScriptStat {
+        val size = file.length()
+        val head = runCatching {
+            val buf = ByteArray(minOf(size, 65536).toInt())
+            val n = file.inputStream().use { it.read(buf) }
+            if (n <= 0) ByteArray(0) else buf.copyOfRange(0, n)
+        }.getOrDefault(ByteArray(0))
+        return ScriptStat(
+            sizeBytes = size,
+            isBinary = looksBinary(head),
+            shebang = readShebang(head)
+        )
+    }
+
+    private fun hasValidShebang(header: ByteArray, len: Int): Boolean {
+        if (len < 2) return false
+        if (header[0] != 0x23.toByte() || header[1] != 0x21.toByte()) return true  // 无 shebang，交给 sh 默认处理
+        val end = header.indexOf(0x0A.toByte()).let { if (it < 0 || it >= len) len else it }
+        val interp = String(header, 0, end, Charsets.UTF_8).removePrefix("#!").trim()
+        return interp in setOf("/system/bin/sh", "/bin/sh", "sh", "/system/bin/mksh")
+    }
+
+    private fun readShebang(head: ByteArray): String {
+        if (head.size < 2 || head[0] != 0x23.toByte() || head[1] != 0x21.toByte()) return "无"
+        val end = head.indexOf(0x0A.toByte()).let { if (it < 0) head.size.coerceAtMost(60) else it }
+        return String(head, 0, end, Charsets.UTF_8).trim().take(60)
+    }
+
+    private fun looksBinary(bytes: ByteArray): Boolean {
+        if (bytes.isEmpty()) return false
+        var suspicious = 0
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            if (v == 0x00) return true
+            if (v < 0x09 || (v > 0x0D && v < 0x20)) suspicious++
+        }
+        return suspicious > bytes.size / 100
     }
 
     private fun asciiName(id: String): String {
@@ -479,23 +295,4 @@ object ShellEnv {
         }
         return safe.take(48)
     }
-
-    /** 执行一条命令并取回合并输出与退出码，带超时。 */
-    private fun runCommand(plan: CommandPlan): Pair<String, Int> = runCatching {
-        val process = ProcessBuilder(plan.argv)
-            .redirectErrorStream(true)
-            .start()
-        plan.stdin?.let { text ->
-            runCatching {
-                process.outputStream.bufferedWriter().use { w ->
-                    w.write(text)
-                    w.flush()
-                }
-            }
-        }
-        val text = process.inputStream.bufferedReader().readText()
-        val finished = process.waitFor(8, TimeUnit.SECONDS)
-        if (!finished) process.destroy()
-        text to process.exitValue()
-    }.getOrDefault("" to -1)
 }

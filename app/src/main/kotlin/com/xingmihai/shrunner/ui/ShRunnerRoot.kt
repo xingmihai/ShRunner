@@ -1,9 +1,7 @@
 package com.xingmihai.shrunner.ui
 
-import com.xingmihai.shrunner.engine.ShellEnv
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import android.app.Application
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,8 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -25,27 +23,38 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xingmihai.shrunner.data.ScriptConfig
 import com.xingmihai.shrunner.data.ScriptEntry
 import com.xingmihai.shrunner.data.ScriptRepository
 import com.xingmihai.shrunner.engine.RunRequest
 import com.xingmihai.shrunner.engine.RunnerService
 import com.xingmihai.shrunner.engine.ShellEngine
+import com.xingmihai.shrunner.engine.ShellEnv
+import com.xingmihai.shrunner.ui.components.ScriptSettingsDialog
 import com.xingmihai.shrunner.ui.screens.ConsoleScreen
 import com.xingmihai.shrunner.ui.screens.EditorScreen
+import com.xingmihai.shrunner.ui.screens.FileBrowserScreen
 import com.xingmihai.shrunner.ui.screens.ScriptsScreen
+import com.xingmihai.shrunner.ui.screens.SettingsScreen
 import com.xingmihai.shrunner.ui.theme.ShRunnerTheme
 import com.xingmihai.shrunner.util.DangerScan
 import com.xingmihai.shrunner.util.displayNameOf
+import com.xingmihai.shrunner.util.requestScriptShortcut
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.File
 
-enum class ShTab(val label: String) { SCRIPTS("脚本"), EDITOR("编辑"), CONSOLE("输出"), ENV("环境") }
+enum class ShTab(val label: String) {
+    SCRIPTS("脚本"), FILES("文件"), CONSOLE("输出"), SETTINGS("设置")
+}
 
 @Composable
 fun ShRunnerRoot(initialScriptId: String? = null) {
@@ -53,16 +62,22 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
     val app = context.applicationContext as Application
     val repo = remember { ScriptRepository.get(app) }
     val runPrefs = remember { com.xingmihai.shrunner.data.RunPrefs.get(context) }
+    val scriptConfig = remember { ScriptConfig.get(context) }
     val listVm: ScriptListViewModel = viewModel()
     val editorVm: EditorViewModel = viewModel()
+    val scope = rememberCoroutineScope()
 
     var tab by remember { mutableStateOf(ShTab.SCRIPTS) }
-    var editingId by remember { mutableStateOf(initialScriptId) }
-    var pendingEntry by remember { mutableStateOf<ScriptEntry?>(null) }
+    var editingId by remember { mutableStateOf<String?>(initialScriptId) }
+    var useRoot by remember { mutableStateOf(runPrefs.useRoot) }
+    var pendingRun by remember { mutableStateOf<PendingRun?>(null) }
     var risks by remember { mutableStateOf<List<String>>(emptyList()) }
-    var useRoot by remember { mutableStateOf(false) }
-    var rootMode by remember { mutableStateOf<com.xingmihai.shrunner.engine.ShellEnv.SuMode?>(null) }
-    val scope = rememberCoroutineScope()
+    var settingsFor by remember { mutableStateOf<ScriptEntry?>(null) }
+
+    LaunchedEffect(Unit) {
+        ShellEngine.modePrefs = context.getSharedPreferences("engine", 0)
+        ShellEngine.rememberMode(ShellEngine.modePrefs!!)
+    }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -72,69 +87,96 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
         }
     }
 
-    fun startRun(entry: ScriptEntry) {
+    /** 统一的运行入口：仓库里的脚本与外部路径都走这里。 */
+    fun startRun(id: String, name: String, path: String) {
+        val cfg = scriptConfig.of(id)
+        val root = scriptConfig.useRoot(id, useRoot)
         RunnerService.start(context)
         ShellEngine.run(
             RunRequest(
-                scriptId = entry.id,
-                scriptName = entry.name,
-                scriptPath = entry.file.absolutePath,
-                // 默认用「暂存脚本所在目录」：脚本常按自己的位置找配套文件。
-                // 用户可在环境页覆盖为任意路径。
-                workDir = runPrefs.workDir.ifBlank { ShellEnv.stageDirOf(entry.file).absolutePath },
-                useRoot = useRoot,
-                env = runPrefs.resolveEnv(),
+                scriptId = id,
+                scriptName = name,
+                scriptPath = path,
+                workDir = cfg.workDir.ifBlank { File(path).parent ?: repo.directory().absolutePath },
+                useRoot = root,
+                env = scriptConfig.envMap(id),
                 dumpEnv = runPrefs.dumpEnv,
-                autoAnswers = runPrefs.answers()
+                autoAnswers = scriptConfig.answers(id)
             )
         )
         tab = ShTab.CONSOLE
     }
 
-    fun requestRun(entry: ScriptEntry) {
-        val hits = DangerScan.scan(repo.readText(entry.id))
-        if (hits.isEmpty()) {
-            startRun(entry)
-        } else {
-            pendingEntry = entry
+    fun requestRun(id: String, name: String, path: String) {
+        val hits = DangerScan.scan(path)
+        if (hits.isEmpty()) startRun(id, name, path) else {
+            pendingRun = PendingRun(id, name, path)
             risks = hits
         }
     }
 
-    // 记录每次运行的退出码，用于列表展示
+    // 运行结束记录退出码
     LaunchedEffect(Unit) {
         ShellEngine.state.collect { state ->
             if (state is ShellEngine.RunState.Finished) {
-                repo.recordRun(state.scriptName, state.exitCode)
+                runCatching { repo.recordRun(state.scriptName, state.exitCode) }
                 listVm.refresh()
             }
         }
     }
 
-    // 桌面快捷方式 / 外部 Intent 直接运行
     LaunchedEffect(initialScriptId) {
         if (!initialScriptId.isNullOrBlank()) {
-            repo.find(initialScriptId)?.let(::startRun)
+            repo.find(initialScriptId)?.let { requestRun(it.id, it.name, it.file.absolutePath) }
         }
     }
 
     if (risks.isNotEmpty()) {
         AlertDialog(
-            onDismissRequest = { risks = emptyList(); pendingEntry = null },
+            onDismissRequest = { risks = emptyList(); pendingRun = null },
             title = { Text("确认执行？") },
             text = { Text("脚本中包含高风险操作：\n\n" + risks.joinToString("\n") { "· $it" }) },
             confirmButton = {
                 TextButton(onClick = {
-                    val entry = pendingEntry
+                    val p = pendingRun
                     risks = emptyList()
-                    pendingEntry = null
-                    if (entry != null) startRun(entry)
+                    pendingRun = null
+                    if (p != null) startRun(p.id, p.name, p.path)
                 }) { Text("仍然执行") }
             },
-            dismissButton = {
-                TextButton(onClick = { risks = emptyList(); pendingEntry = null }) { Text("取消") }
+            dismissButton = { TextButton(onClick = { risks = emptyList(); pendingRun = null }) { Text("取消") } }
+        )
+    }
+
+    settingsFor?.let { entry ->
+        ScriptSettingsDialog(
+            title = entry.name,
+            initial = scriptConfig.of(entry.id),
+            onDismiss = { settingsFor = null },
+            onConfirm = { cfg ->
+                scriptConfig.save(entry.id, cfg)
+                settingsFor = null
             }
         )
+    }
+
+    // 编辑器作为独立全屏页，保存后返回列表
+    if (editingId != null) {
+        ShRunnerTheme {
+            EditorScreen(
+                viewModel = editorVm,
+                scriptId = editingId,
+                onSaved = { id ->
+                    editingId = null
+                    listVm.refresh()
+                },
+                onRun = { id ->
+                    repo.find(id)?.let { requestRun(it.id, it.name, it.file.absolutePath) }
+                    editingId = null
+                }
+            )
+        }
+        return
     }
 
     ShRunnerTheme {
@@ -149,9 +191,9 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                                 Icon(
                                     imageVector = when (item) {
                                         ShTab.SCRIPTS -> Icons.Default.Description
-                                        ShTab.EDITOR -> Icons.Default.Edit
+                                        ShTab.FILES -> Icons.Default.Folder
                                         ShTab.CONSOLE -> Icons.Default.Code
-                                        ShTab.ENV -> Icons.Default.Tune
+                                        ShTab.SETTINGS -> Icons.Default.Settings
                                     },
                                     contentDescription = item.label
                                 )
@@ -170,56 +212,58 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                         onCreate = {
                             val id = listVm.create("script_${System.currentTimeMillis() / 1000}")
                             editingId = id
-                            tab = ShTab.EDITOR
                         },
-                        onEdit = { id -> editingId = id; tab = ShTab.EDITOR },
-                        onRun = { entry -> requestRun(entry) },
+                        onEdit = { id -> editingId = id },
+                        onRun = { entry -> requestRun(entry.id, entry.name, entry.file.absolutePath) },
                         onDelete = { entry -> listVm.delete(entry.id) },
                         onFavorite = { entry -> listVm.toggleFavorite(entry.id) },
-                        onShortcut = { entry ->
-                            com.xingmihai.shrunner.util.requestScriptShortcut(context, entry.id, entry.name)
+                        onShortcut = { entry -> requestScriptShortcut(context, entry.id, entry.name) },
+                        onSettings = { entry -> settingsFor = entry }
+                    )
+
+                    ShTab.FILES -> FileBrowserScreen(
+                        onRun = { path ->
+                            val file = File(path)
+                            requestRun(file.nameWithoutExtension, file.name, file.absolutePath)
+                        },
+                        onImport = { path ->
+                            val file = File(path)
+                            if (repo.importPath(file.absolutePath) != null) {
+                                listVm.refresh()
+                                Toast.makeText(context, "已导入：${file.name}", Toast.LENGTH_SHORT).show()
+                                tab = ShTab.SCRIPTS
+                            } else {
+                                Toast.makeText(context, "导入失败", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     )
-                    ShTab.EDITOR -> EditorScreen(
-                        viewModel = editorVm,
-                        scriptId = editingId,
-                        onSaved = { id -> editingId = id; listVm.refresh() },
-                        onRun = { id -> repo.find(id)?.let { requestRun(it) } }
-                    )
-                    ShTab.ENV -> com.xingmihai.shrunner.ui.screens.EnvScreen(
-                        prefs = remember { com.xingmihai.shrunner.data.RunPrefs.get(context) }
-                    )
+
                     ShTab.CONSOLE -> ConsoleScreen(
                         useRoot = useRoot,
-                        onUseRootChange = { useRoot = it },
-                        rootMode = rootMode,
-                        onRootModeChange = { mode ->
-                            rootMode = mode
-                            com.xingmihai.shrunner.engine.ShellEnv.preferredMode = mode
-                            com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
-                            scope.launch(Dispatchers.IO) {
-                                com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
-                            }
-                        },
-                        onReprobe = {
-                            com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
-                            scope.launch(Dispatchers.IO) {
-                                com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
-                            }
-                        },
-                        onDiagnose = {
-                            val id = editingId
-                            scope.launch(Dispatchers.IO) {
-                                com.xingmihai.shrunner.data.ScriptRepository.get(app).find(id ?: "")
-                                    ?.let { ShellEngine.diagnose(it.file.absolutePath) }
-                                    ?: ShellEngine.diagnose(null)
-                            }
+                        onUseRootChange = {
+                            useRoot = it
+                            runPrefs.useRoot = it
                         },
                         onStop = { ShellEngine.stop() },
                         onClear = { ShellEngine.clear() }
+                    )
+
+                    ShTab.SETTINGS -> SettingsScreen(
+                        prefs = runPrefs,
+                        useRoot = useRoot,
+                        onUseRootChange = {
+                            useRoot = it
+                            runPrefs.useRoot = it
+                        },
+                        onReprobe = {
+                            ShellEnv.resetProbe()
+                            scope.launch(Dispatchers.IO) { ShellEnv.probeRoot(force = true) }
+                        }
                     )
                 }
             }
         }
     }
 }
+
+private data class PendingRun(val id: String, val name: String, val path: String)

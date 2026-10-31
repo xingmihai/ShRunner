@@ -1,5 +1,7 @@
 package com.xingmihai.shrunner.util
 
+import java.io.File
+
 /** 危险命令扫描：命中后在首次执行前弹二次确认。 */
 object DangerScan {
 
@@ -19,9 +21,23 @@ object DangerScan {
         Rule(Regex("""\bcurl\b[^\n]*\|\s*(ba)?sh"""), "下载并直接执行远程脚本")
     )
 
-    fun scan(source: String): List<String> {
-        val noComments = source.lines().filterNot { it.trimStart().startsWith("#") }
-        val text = noComments.joinToString("\n")
-        return RULES.filter { it.pattern.containsMatchIn(text) }.map { it.reason }.distinct()
+    /**
+     * 扫描危险命令。
+     * 只读前 256KB：危险操作通常写在脚本开头，10MB 脚本不必全量读取。
+     */
+    fun scan(path: String): List<String> {
+        val file = File(path)
+        val size = file.length()
+        if (size <= 0) return emptyList()
+        val text = runCatching {
+            val buf = ByteArray(minOf(size, 262_144).toInt())
+            val n = file.inputStream().use { it.read(buf) }
+            if (n <= 0) return emptyList()
+            String(buf, 0, n, Charsets.UTF_8)
+        }.getOrElse { return emptyList() }
+
+        val noComments = text.lines().filterNot { it.trimStart().startsWith("#") }
+        val body = noComments.joinToString("\n")
+        return RULES.filter { it.pattern.containsMatchIn(body) }.map { it.reason }.distinct()
     }
 }

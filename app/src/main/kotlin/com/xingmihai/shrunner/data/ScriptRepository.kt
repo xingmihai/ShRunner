@@ -61,10 +61,34 @@ class ScriptRepository private constructor(private val app: Application) {
         return ScriptEntry(id, id, file, file.lastModified(), file.length())
     }
 
+    /** 从 content:// 导入：流式拷贝，10MB 脚本也不会整体进内存。 */
     fun import(uri: Uri, rawName: String): ScriptEntry? {
-        val content = runCatching {
-            app.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
-        }.getOrNull() ?: return null
+        val id = uniqueId(rawName)
+        val target = fileOf(id)
+        val ok = runCatching {
+            app.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } != null
+        }.getOrDefault(false)
+        return if (ok) ScriptEntry(id, id, target, target.lastModified(), target.length()) else null
+    }
+
+    /** 从本地路径导入（文件浏览器用）。 */
+    fun importPath(path: String): ScriptEntry? {
+        val source = File(path)
+        if (!source.isFile) return null
+        val id = uniqueId(source.name)
+        val target = fileOf(id)
+        val ok = runCatching {
+            source.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            true
+        }.getOrDefault(false)
+        return if (ok) ScriptEntry(id, id, target, target.lastModified(), target.length()) else null
+    }
+
+    private fun uniqueId(rawName: String): String {
         var id = normalizeId(rawName)
         var file = fileOf(id)
         var index = 1
@@ -73,8 +97,7 @@ class ScriptRepository private constructor(private val app: Application) {
             file = fileOf(id)
             index++
         }
-        file.writeText(content)
-        return ScriptEntry(id, id, file, file.lastModified(), file.length())
+        return id
     }
 
     fun rename(id: String, rawNewName: String): String {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
@@ -43,6 +44,7 @@ fun ScriptsScreen(
     onDelete: (ScriptEntry) -> Unit,
     onFavorite: (ScriptEntry) -> Unit,
     onShortcut: (ScriptEntry) -> Unit,
+    onSettings: (ScriptEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scripts by viewModel.scripts.collectAsStateWithLifecycle()
@@ -78,7 +80,8 @@ fun ScriptsScreen(
                         onRun = { onRun(entry) },
                         onDelete = { onDelete(entry) },
                         onFavorite = { onFavorite(entry) },
-                        onShortcut = { onShortcut(entry) }
+                        onShortcut = { onShortcut(entry) },
+                        onSettings = { onSettings(entry) }
                     )
                 }
             }
@@ -93,7 +96,8 @@ private fun ScriptCard(
     onRun: () -> Unit,
     onDelete: () -> Unit,
     onFavorite: () -> Unit,
-    onShortcut: () -> Unit
+    onShortcut: () -> Unit,
+    onSettings: () -> Unit
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -110,6 +114,9 @@ private fun ScriptCard(
                         imageVector = if (entry.favorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = "收藏"
                     )
+                }
+                IconButton(onClick = onSettings) {
+                    Icon(imageVector = Icons.Default.Settings, contentDescription = "脚本设置")
                 }
                 IconButton(onClick = onDelete) {
                     Icon(imageVector = Icons.Default.Delete, contentDescription = "删除")

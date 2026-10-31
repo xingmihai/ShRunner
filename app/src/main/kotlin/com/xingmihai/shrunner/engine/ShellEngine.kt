@@ -11,18 +11,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
-/** 输出来源，控制台据此着色。 */
 enum class Stream { STDOUT, STDERR, SYSTEM }
 
-data class OutputLine(
-    val text: String,
-    val stream: Stream,
-    val seq: Long
-)
+data class OutputLine(val text: String, val stream: Stream, val seq: Long)
 
-/** 一次执行请求。 */
 data class RunRequest(
     val scriptId: String,
     val scriptName: String,
@@ -31,22 +26,25 @@ data class RunRequest(
     val workDir: String? = null,
     val env: Map<String, String> = emptyMap(),
     val useRoot: Boolean = false,
-    val timeoutMs: Long = 0L, // 0 表示不限制
+    val timeoutMs: Long = 0L,
     val dumpEnv: Boolean = false,
     val autoAnswers: List<String> = emptyList()
 )
 
 /**
- * Shell 执行引擎（进程内单例）。
- * 设计要点：
- * 1. 通过 ProcessBuilder 调用系统 sh，合并 stdout/stderr，避免两条流互锁；
- * 2. 逐行回调，UI 实时追加；
- * 3. 单飞锁保证同时只有一个脚本在跑，支持超时与手动停止。
+ * Shell 执行引擎。
+ *
+ * 执行顺序（root 模式）：
+ * 1. 上次成功的方式（记住了就先用它）；
+ * 2. 持久 root shell（大脚本唯一可靠路径）；
+ * 3. su -c / su 0 两种一次性方式；
+ * 4. 最后回退非 root。
  */
 object ShellEngine {
 
     private const val MAX_LINES = 5000
     private const val EXIT_TIMEOUT = 137
+    private val PREF_SUCCESS = "shrunner_last_ok_mode"
 
     private val seq = AtomicLong(0)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -58,30 +56,11 @@ object ShellEngine {
     @Volatile
     private var currentSession: RootSession? = null
 
-    /** 看到提问行时自动应答的钩子，执行结束会清空。 */
     @Volatile
     private var answerWatcher: ((String) -> Unit)? = null
 
-    /** 把用户输入送给正在运行的脚本；返回是否送达。 */
-    fun sendInput(text: String): Boolean {
-        // 持久 root shell 会话优先
-        currentSession?.let { return it.sendInput(text) }
-        val process = currentProcess ?: return false
-        return runCatching {
-            process.outputStream.bufferedWriter().use { w ->
-                w.write(text)
-                if (!text.endsWith("\n")) w.write("\n")
-                w.flush()
-            }
-            true
-        }.getOrDefault(false)
-    }
-
-    /** 把用户送进去的输入回显到终端，看起来更像正常交互。 */
-    fun appendEcho(text: String) = append(text, Stream.SYSTEM)
-
-    /** 当前是否处于可接受输入的运行状态。 */
-    fun isRunning(): Boolean = _state.value is RunState.Running
+    @Volatile
+    private var lastOkMode: ShellEnv.SuMode? = null
 
     private val _lines = MutableStateFlow<List<OutputLine>>(emptyList())
     val lines: StateFlow<List<OutputLine>> = _lines.asStateFlow()
@@ -96,390 +75,263 @@ object ShellEngine {
     private val _state = MutableStateFlow<RunState>(RunState.Idle)
     val state: StateFlow<RunState> = _state.asStateFlow()
 
+    fun rememberMode(prefs: android.content.SharedPreferences) {
+        lastOkMode = prefs.getString(PREF_SUCCESS, null)?.let { runCatching { ShellEnv.SuMode.valueOf(it) }.getOrNull() }
+    }
+
+    private fun saveMode(mode: ShellEnv.SuMode, prefs: android.content.SharedPreferences?) {
+        lastOkMode = mode
+        prefs?.edit()?.putString(PREF_SUCCESS, mode.name)?.apply()
+    }
+
+    var modePrefs: android.content.SharedPreferences? = null
+
     fun run(request: RunRequest) {
         scope.launch {
-            mutex.withLock {
-                runInternal(request)
-            }
+            mutex.withLock { runInternal(request) }
         }
     }
 
     private suspend fun runInternal(request: RunRequest) {
-        clearOutputLocked()
+        _lines.value = emptyList()
         val started = System.currentTimeMillis()
         _state.value = RunState.Running(request.scriptName, started)
-        appendSystem(buildBanner(request))
+        appendSystem("$ ${if (request.useRoot) "root" else "sh"} ${request.scriptName}")
 
+        var lastExit = -1
+        var succeeded = false
         try {
-            // 先修一遍换行符/shebang，再暂存到纯 ASCII 路径执行
-            val staged = runCatching { ShellEnv.stageScript(File(request.scriptPath), request.scriptId) }
-                .getOrDefault(File(request.scriptPath))
-            val scriptPath = ShellEnv.canonical(staged)
-            if (scriptPath != ShellEnv.canonical(File(request.scriptPath))) {
-                appendSystem("[ShRunner] 已暂存到：$scriptPath")
+            val original = File(request.scriptPath)
+            val stat = ShellEnv.stat(original)
+            appendSystem(
+                "体检：${"%.1fMB".format(stat.sizeBytes / 1048576.0)} · " +
+                    (if (stat.isBinary) "含二进制" else "纯文本") + " · shebang「${stat.shebang}」"
+            )
+
+            // 大脚本零拷贝：shebang 正确且路径 ASCII 时直接用原文件
+            val useSession = request.useRoot &&
+                (lastOkMode == ShellEnv.SuMode.SESSION || lastOkMode == null)
+            val scriptPath = if (ShellEnv.needsStaging(original, useSession)) {
+                val staged = runCatching { ShellEnv.stageScript(original, request.scriptId) }
+                    .getOrDefault(original)
+                if (staged.path != original.path) appendSystem("已暂存副本：${staged.name}")
+                ShellEnv.canonical(staged)
+            } else {
+                ShellEnv.canonical(original)
             }
-            appendSystem(describeScript(staged, File(request.scriptPath)))
 
             if (request.useRoot) {
                 val probe = ShellEnv.probeRoot()
-                if (!probe.ok) {
-                    appendSystem("[ShRunner] root 探测失败：${probe.detail}，本次按非 root 执行")
-                    probe.tried.take(3).forEach { appendSystem("[ShRunner] 尝试记录：$it") }
-                } else {
-                    appendSystem("[ShRunner] root 就绪：${probe.suPath} · ${probe.mode?.label}")
-                }
+                if (!probe.ok) appendSystem("root 不可用（${probe.detail}），改普通执行")
             }
 
-            // 逐个候选方案尝试：退出 127 或出现 su 解码错误时自动换下一种
-            val plans = candidatePlans(request, scriptPath)
-            val sizeBytes = runCatching { File(scriptPath).length() }.getOrDefault(0L)
-            if (request.useRoot && sizeBytes > 2 * 1024 * 1024) {
-                appendSystem("[ShRunner] 脚本超过 2MB（${sizeBytes / 1024 / 1024}MB），su -c 有体积上限，优先用持久 root shell")
-                val code = runViaRootSession(request, scriptPath)
-                if (code != null && code == 0) {
-                    appendSystem("[ShRunner] 进程退出，退出码 $code")
-                    _state.value = RunState.Finished(
-                        request.scriptName, code, System.currentTimeMillis() - started
-                    )
-                    return
-                }
-                appendSystem("[ShRunner] 持久 shell 未成功（退出 ${code ?: "未知"}），继续尝试其他方式")
-            }
-            var lastExit = -1
-            var succeeded = false
-            for ((index, plan) in plans.withIndex()) {
-                if (index > 0) {
-                    appendSystem("[ShRunner] 上一种方式失败（退出 $lastExit），自动换用：${plan.display}")
-                }
-                val result = execute(request, plan)
+            // 1) 优先用上次成功的方式
+            val ordered = orderedModes(request.useRoot)
+            for ((index, mode) in ordered.withIndex()) {
+                if (index > 0) appendSystem("换用：${mode.label}")
+                val result = execute(request, scriptPath, mode)
                 lastExit = result.first
-                val noOutput = result.third <= 1     // 只回了一行（多半是报错本身）
-                val looksBroken = result.second || noOutput
-                if (lastExit == 0 || (lastExit != 127 && !looksBroken)) {
+                if (result.second) {
                     succeeded = true
+                    if (request.useRoot && mode != ShellEnv.SuMode.SESSION) saveMode(mode, modePrefs)
+                    else if (request.useRoot) saveMode(mode, modePrefs)
                     break
                 }
-                if (looksBroken) {
-                    appendSystem("[ShRunner] 判定该方式未真正执行（输出 ${result.third} 行），继续尝试")
-                }
             }
 
-            // 所有一次性方案都失败 → 改用持久 root shell：脚本路径不经 su 参数解析
-            if (!succeeded && request.useRoot) {
-                val code = runViaRootSession(request, scriptPath)
-                if (code != null) {
-                    lastExit = code
-                    succeeded = code == 0
-                    if (!succeeded) {
-                        // 整条执行也异常，最后再试逐条（二进制脚本跳过，逐行会破坏结构）
-                        val report = ShellEnv.inspectStaged(staged, File(request.scriptPath))
-                        val lineCode = if (report.isBinary) {
-                            appendSystem("[ShRunner] 脚本含二进制数据，跳过逐行执行（会破坏结构）")
-                            null
-                        } else {
-                            runLineByLine(request, staged)
-                        }
-                        if (lineCode != null) {
-                            lastExit = lineCode
-                            succeeded = lineCode == 0
-                        }
-                    }
-                }
-            }
-
-            appendSystem("[ShRunner] 进程退出，退出码 $lastExit${exitHint(lastExit)}")
+            appendSystem("退出码 $lastExit${exitHint(lastExit)}")
             _state.value = RunState.Finished(request.scriptName, lastExit, System.currentTimeMillis() - started)
         } catch (t: Throwable) {
             val message = t.message ?: t::class.java.simpleName
-            appendSystem("[ShRunner] 执行失败：$message")
+            appendSystem("执行失败：$message")
             _state.value = RunState.Failed(request.scriptName, message)
         } finally {
+            answerWatcher = null
             runCatching { currentProcess?.destroy() }
             currentProcess = null
+            currentSession = null
         }
     }
 
-    /** 返回 (退出码, 是否出现解码类错误, 输出行数)。 */
+    /** 候选方式顺序：上次成功的 → 持久会话 → su -c → su 0 → 非 root。 */
+    private fun orderedModes(useRoot: Boolean): List<ShellEnv.SuMode> {
+        if (!useRoot) return listOf(ShellEnv.SuMode.SU_C_SH)   // 占位：下面会按非 root 处理
+        val list = mutableListOf<ShellEnv.SuMode>()
+        ShellEnv.preferredMode?.let { list += it }
+        lastOkMode?.let { if (it !in list) list += it }
+        listOf(ShellEnv.SuMode.SESSION, ShellEnv.SuMode.SU_C_SH, ShellEnv.SuMode.SU_0_SH, ShellEnv.SuMode.SU_STDIN)
+            .forEach { if (it !in list) list += it }
+        return list
+    }
+
+    /** 返回 (退出码, 是否真的执行成功)。 */
     private suspend fun execute(
         request: RunRequest,
-        plan: ShellEnv.CommandPlan
-    ): Triple<Int, Boolean, Int> {
-        appendSystem("[ShRunner] 实际命令：" + plan.display)
+        scriptPath: String,
+        mode: ShellEnv.SuMode
+    ): Pair<Int, Boolean> {
+        if (!request.useRoot) return executePlain(request, scriptPath)
+
+        val probe = ShellEnv.probeRoot()
+        val su = probe.suPath ?: return 127 to false
+        val shell = ShellEnv.shellPath()
+
+        if (mode == ShellEnv.SuMode.SESSION) {
+            val session = RootSession.open(su) ?: return 127 to false
+            currentSession = session
+            return try {
+                session.exec(ShellEnv.envPrologue(), 8000)
+                request.env.filterKeys { it != "PATH" }.takeIf { it.isNotEmpty() }?.let { extra ->
+                    session.exec(
+                        extra.entries.joinToString(" ") { (k, v) -> "export $k=" + ShellEnv.singleQuote(v) },
+                        8000
+                    )
+                }
+                if (request.dumpEnv) {
+                    session.exec("env | sort", 8000) { line -> if (line.isNotBlank()) appendSystem("  $line") }
+                }
+                request.workDir?.let { session.exec("cd " + ShellEnv.singleQuote(it), 8000) }
+
+                val queue = ConcurrentLinkedQueue(request.autoAnswers)
+                if (queue.isNotEmpty()) {
+                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
+                }
+                answerWatcher = { line ->
+                    val answer = queue.peek()
+                    if (answer != null && looksLikePrompt(line)) {
+                        queue.poll()
+                        if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
+                    }
+                }
+
+                val command = buildList {
+                    add(shell)
+                    add(ShellEnv.singleQuote(scriptPath))
+                    request.args.forEach { add(ShellEnv.singleQuote(it)) }
+                }.joinToString(" ")
+
+                val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
+                val code = session.exec(command, timeout) { line ->
+                    if (line.isNotEmpty()) {
+                        append(line, Stream.STDOUT)
+                        answerWatcher?.invoke(line)
+                    }
+                }
+                val exit = code ?: return EXIT_TIMEOUT to false
+                exit to (exit == 0)
+            } finally {
+                answerWatcher = null
+                currentSession = null
+                session.close()
+            }
+        }
+
+        // 一次性方式
+        val plan = ShellEnv.buildCommand(mode, su, shell, scriptPath, request.args)
         val process = startProcess(request, plan)
         currentProcess = process
-        if (request.autoAnswers.isNotEmpty()) {
-            appendSystem("[ShRunner] 自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
-        }
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
-        var sawDecodeError = false
         var lines = 0
         val finished = withTimeoutOrNull(effectiveTimeout(request)) {
             while (true) {
                 val line = reader.readLine() ?: break
                 lines++
-                if (line.contains("decompress", true) || line.contains("not gzip", true) ||
-                    line.contains("No such file or directory", true)
-                ) {
-                    sawDecodeError = true
-                }
                 append(line, Stream.STDOUT)
             }
             process.waitFor()
         }
         if (finished == null) {
             process.destroy()
-            appendSystem("[ShRunner] 执行超时（${request.timeoutMs} ms），已终止进程")
-            return Triple(EXIT_TIMEOUT, sawDecodeError, lines)
+            return EXIT_TIMEOUT to false
         }
-        return Triple(finished, sawDecodeError, lines)
+        // 输出过少基本等于没跑起来
+        return finished to (finished == 0 && lines > 0)
     }
 
-    /**
-     * 兼容模式 A：持久 root shell + 整条命令。
-     * 脚本路径只在 shell 内部作为参数出现，不经过 su 的参数解析，
-     * 因此可以绕过 su -c 的体积上限（4MB 能过、21MB 报 Cannot decompress 的设备靠这个救）。
-     */
-    private suspend fun runViaRootSession(request: RunRequest, scriptPath: String): Int? {
-        val su = ShellEnv.suPath() ?: return null
-        val shell = ShellEnv.shellPath()
-        val session = RootSession.open(su) ?: run {
-            appendSystem("[ShRunner] 持久 root shell 不可用")
-            return null
+    private suspend fun executePlain(request: RunRequest, scriptPath: String): Pair<Int, Boolean> {
+        val argv = mutableListOf(ShellEnv.shellPath(), scriptPath)
+        argv.addAll(request.args)
+        val plan = ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
+        val process = startProcess(request, plan)
+        currentProcess = process
+        val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
+        var lines = 0
+        val finished = withTimeoutOrNull(effectiveTimeout(request)) {
+            while (true) {
+                val line = reader.readLine() ?: break
+                lines++
+                append(line, Stream.STDOUT)
+            }
+            process.waitFor()
         }
-        appendSystem("[ShRunner] 启用持久 root shell：${session.info()}，在 shell 内执行脚本")
-        currentSession = session
-        return try {
-            // 先建立完整执行环境（PATH / TMPDIR / LD_LIBRARY_PATH 等），
-            // 缺这些变量时脚本里的原生程序常常取不到值直接崩溃
-            session.exec(ShellEnv.envPrologue(), 8000) { line ->
-                if (line.isNotBlank()) append(line, Stream.SYSTEM)
-            }
-            request.env.filterKeys { it != "PATH" }.takeIf { it.isNotEmpty() }?.let { extra ->
-                session.exec(
-                    extra.entries.joinToString(" ") { (k, v) -> "export $k=" + ShellEnv.singleQuote(v) },
-                    8000
-                )
-            }
-            if (request.env.isNotEmpty()) {
-                appendSystem("[ShRunner] 注入变量：" + request.env.entries.joinToString(", ") { (k, v) -> "$k=$v" })
-            }
-            if (request.dumpEnv) {
-                session.exec("env | sort", 8000) { line ->
-                    if (line.isNotBlank()) appendSystem("  $line")
-                }
-            }
-            session.exec("cd " + ShellEnv.singleQuote(request.workDir ?: "/"), 8000)
-
-            // 自动应答：绝不能提前发（会被 shell 当成命令执行），
-            // 必须等脚本真的打印出提问行再逐条喂进去
-            val queue = java.util.concurrent.ConcurrentLinkedQueue(request.autoAnswers)
-            val total = queue.size
-            if (total > 0) {
-                appendSystem("[ShRunner] 自动应答已就绪 ${total} 项：${request.autoAnswers.joinToString(" / ")}")
-            }
-            answerWatcher = { line ->
-                val answer = queue.peek()
-                if (answer != null && looksLikePrompt(line)) {
-                    queue.poll()
-                    if (session.sendInput(answer)) {
-                        appendSystem("[ShRunner] 自动应答 → $answer")
-                    }
-                }
-            }
-            val command = buildList {
-                add(shell)
-                add(ShellEnv.singleQuote(scriptPath))
-                request.args.forEach { add(ShellEnv.singleQuote(it)) }
-            }.joinToString(" ")
-            val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
-            session.exec(command, timeout) { line ->
-                if (line.isNotEmpty()) {
-                    append(line, Stream.STDOUT)
-                    answerWatcher?.invoke(line)
-                }
-            }
-        } finally {
-            answerWatcher = null
-            currentSession = null
-            session.close()
+        if (finished == null) {
+            process.destroy()
+            return EXIT_TIMEOUT to false
         }
-    }
-
-    /**
-     * 兼容模式 B（最后兜底）：持久 root shell 逐条短命令。
-     * 仅在整条执行也失败时使用；跨行结构（heredoc、函数）可能不生效。
-     */
-    private suspend fun runLineByLine(request: RunRequest, script: File): Int? {
-        val su = ShellEnv.suPath() ?: return null
-        val session = RootSession.open(su) ?: return null
-        appendSystem("[ShRunner] 兜底方案：逐条短命令执行（跨行结构可能失效）")
-        return try {
-            val lines = runCatching { script.readLines() }.getOrElse { return null }
-            lines.forEachIndexed { index, raw ->
-                val line = raw.trim()
-                if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
-                val code = session.exec(line, 15_000) { l -> if (l.isNotEmpty()) append(l, Stream.STDOUT) }
-                if (code == null) {
-                    appendSystem("[ShRunner] 第 ${index + 1} 行超时，已中止")
-                    return 1
-                }
-            }
-            appendSystem("[ShRunner] 逐条执行完毕")
-            0
-        } finally {
-            session.close()
-        }
-    }
-
-    /** 脚本体检：全部按字节处理，避免破坏内嵌的二进制数据。 */
-    private fun describeScript(staged: File, original: File): String {
-        val report = ShellEnv.inspectStaged(staged, original)
-        val mb = "%.1fMB".format(report.sizeBytes / 1048576.0)
-        val integrity = if (report.sameSize) "字节数一致（内容未改动）" else "⚠ 字节数与原文件不同"
-        return "[ShRunner] 脚本体检：$mb · ${if (report.isBinary) "含二进制数据" else "纯文本"} · " +
-            "shebang「${report.shebang}」 · $integrity"
-    }
-
-    /** 候选执行方案：首选探测通过的，其余作为失败回退。 */
-    private fun candidatePlans(request: RunRequest, scriptPath: String): List<ShellEnv.CommandPlan> {
-        val shell = ShellEnv.shellPath()
-        val plain = run {
-            val argv = mutableListOf(shell, scriptPath)
-            argv.addAll(request.args)
-            ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
-        }
-        if (!request.useRoot) return listOf(plain)
-
-        val probe = ShellEnv.probeRoot()
-        val su = probe.suPath
-        if (!probe.ok || su == null) {
-            appendSystem("[ShRunner] 已回退为普通（非 root）执行")
-            return listOf(plain)
-        }
-
-        val sizeMb = runCatching { File(scriptPath).length() }.getOrDefault(0L) / (1024 * 1024)
-        // 大脚本（>2MB）直接走持久 shell：su -c 对参数体积有上限，试了也是白跑
-        val bigScript = sizeMb >= 2
-
-        val modes = mutableListOf<ShellEnv.SuMode>()
-        if (!bigScript) {
-            modes += ShellEnv.SuMode.SU_C_GZIP   // 仅小脚本值得试
-        }
-        probe.mode?.let { if (it !in modes) modes += it }
-        ShellEnv.preferredMode?.let { if (it !in modes) modes += it }
-        ShellEnv.SuMode.entries.forEach { if (it !in modes && it != ShellEnv.SuMode.SU_C_GZIP) modes += it }
-        if (bigScript) modes += ShellEnv.SuMode.SU_C_GZIP   // 放最后兜底
-
-        // 预先生成 gzip 版本（失败则该模式自动跳过）
-        val gzPath = ShellEnv.gzip(File(scriptPath))?.let { ShellEnv.canonical(it) }
-        if (gzPath != null) {
-            appendSystem("[ShRunner] 已生成压缩副本（${File(gzPath).length() / 1024} KB）：$gzPath")
-        }
-
-        return modes.mapNotNull { mode ->
-            val path = if (mode == ShellEnv.SuMode.SU_C_GZIP) gzPath ?: return@mapNotNull null else scriptPath
-            ShellEnv.buildCommand(mode, su, shell, path, request.args)
-        } + plain
+        return finished to true
     }
 
     private fun effectiveTimeout(request: RunRequest): Long =
-        if (request.timeoutMs <= 0L) Long.MAX_VALUE else request.timeoutMs
-
-    private fun buildBanner(request: RunRequest): String {
-        val prefix = if (request.useRoot) "root" else "sh"
-        val args = if (request.args.isEmpty()) "" else " " + request.args.joinToString(" ")
-        return "$ ${prefix} ${request.scriptPath}$args"
-    }
-
-    /** 退出码含义提示，方便直接看懂 126 / 127 这类报错。 */
-    private fun exitHint(code: Int): String = when (code) {
-        EXIT_TIMEOUT -> "（执行超时被终止）"
-        126 -> "（无执行权限，检查 chmod / SELinux）"
-        127 -> "（命令或解释器未找到，检查 shebang 与路径）"
-        0 -> ""
-        else -> "（脚本自身返回）"
-    }
-
-    private fun planCommand(request: RunRequest, scriptPath: String): ShellEnv.CommandPlan {
-        val shell = ShellEnv.shellPath()
-        if (!request.useRoot) {
-            val argv = mutableListOf(shell, scriptPath)
-            argv.addAll(request.args)
-            return ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
-        }
-        val probe = ShellEnv.probeRoot()
-        if (!probe.ok || probe.suPath == null || probe.mode == null) {
-            // root 探测没通过就降级为普通执行，至少脚本能跑起来
-            appendSystem("[ShRunner] 已回退为普通（非 root）执行")
-            val argv = mutableListOf(shell, scriptPath)
-            argv.addAll(request.args)
-            return ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
-        }
-        return ShellEnv.buildCommand(probe.mode, probe.suPath, shell, scriptPath, request.args)
-    }
+        if (request.timeoutMs > 0) request.timeoutMs else Long.MAX_VALUE
 
     private fun startProcess(request: RunRequest, plan: ShellEnv.CommandPlan): Process {
         val builder = ProcessBuilder(plan.argv)
-        val workDir = request.workDir
-        if (!workDir.isNullOrBlank() && File(workDir).isDirectory) {
-            builder.directory(File(workDir))
-        }
-        // 合并 stderr 到 stdout，避免双流读取造成的管道阻塞
+        request.workDir?.let { if (File(it).isDirectory) builder.directory(File(it)) }
         builder.redirectErrorStream(true)
         val env = builder.environment()
         ShellEnv.baseEnv().forEach { (k, v) -> env[k] = v }
         request.workDir?.let { env["HOME"] = it }
         request.env.forEach { (k, v) -> env[k] = v }
-
         val process = builder.start()
-        // stdin 模式：把命令写进去后立刻关闭，让 su 开始执行
         plan.stdin?.let { text ->
             runCatching {
-                process.outputStream.bufferedWriter().use { w ->
-                    w.write(text)
-                    w.flush()
-                }
+                process.outputStream.bufferedWriter().use { w -> w.write(text); w.flush() }
             }
         }
         return process
     }
 
-    /** 判断一行是否像在等用户输入（用于自动应答时机）。 */
+    /** 把用户输入送给正在运行的脚本。 */
+    fun sendInput(text: String): Boolean {
+        currentSession?.let { return it.sendInput(text) }
+        val process = currentProcess ?: return false
+        return runCatching {
+            process.outputStream.bufferedWriter().use { w ->
+                w.write(text)
+                if (!text.endsWith("\n")) w.write("\n")
+                w.flush()
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun appendEcho(text: String) = append(text, Stream.SYSTEM)
+
     private fun looksLikePrompt(line: String): Boolean {
         val text = line.trim()
         if (text.isEmpty()) return false
         val patterns = listOf(
-            Regex("""\[\d+\s*/\s*\d+\].*[:：]\s*$"""),   // [1/2]:  这类选项提示
-            Regex("""[:：]\s*$"""),                            // 以冒号结尾
-            Regex("""\?\s*$"""),                              // 以问号结尾
-            Regex("""\(y/n\)|\(Y/n\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
-            Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose|Enter your|Choose""")
+            Regex("""\[\d+\s*/\s*\d+\].*[:：]\s*$"""),
+            Regex("""[:：]\s*$"""),
+            Regex("""\?\s*$"""),
+            Regex("""\(y/n\)|\[y/N\]|\[Y/n\]""", RegexOption.IGNORE_CASE),
+            Regex("""请输入|请选择|请确认|Please enter|Please select|Please choose""")
         )
         return patterns.any { it.containsMatchIn(text) }
     }
 
-    /** 执行前把环境变量打印到输出区。 */
-    private fun dumpEnv(env: Map<String, String>) {
-        appendSystem("[ShRunner] 执行环境：")
-        env.entries.sortedBy { it.key }.forEach { (k, v) ->
-            appendSystem("  $k=$v")
-        }
+    private fun exitHint(code: Int): String = when (code) {
+        EXIT_TIMEOUT -> "（超时终止）"
+        126 -> "（无执行权限）"
+        127 -> "（命令或解释器未找到）"
+        0 -> ""
+        else -> "（脚本自身返回）"
     }
 
-    /** 手动停止当前执行。 */
     fun stop() {
         runCatching { currentProcess?.destroy() }
         currentProcess = null
-        appendSystem("[ShRunner] 已收到停止指令")
-    }
-
-    /** 一键 root 诊断：把探测结果直接打到输出区。 */
-    fun diagnose(scriptPath: String?) {
-        scope.launch {
-            appendSystem("[ShRunner] 开始 root 诊断…")
-            val results = ShellEnv.diagnose(ShellEnv.canonical(File(scriptPath ?: "")))
-            results.forEach { appendSystem(it) }
-        }
+        appendSystem("已停止")
     }
 
     fun clear() {
@@ -487,19 +339,13 @@ object ShellEngine {
         _state.value = RunState.Idle
     }
 
-    private fun clearOutputLocked() {
-        _lines.value = emptyList()
-    }
-
     private fun append(text: String, stream: Stream) {
         val line = OutputLine(text, stream, seq.incrementAndGet())
         val current = _lines.value
         _lines.value = if (current.size >= MAX_LINES) {
             current.drop(current.size - MAX_LINES + 1) + line
-        } else {
-            current + line
-        }
+        } else current + line
     }
 
-    private fun appendSystem(text: String) = append(text, Stream.SYSTEM)
+    private fun appendSystem(text: String) = append("[ShRunner] $text", Stream.SYSTEM)
 }
