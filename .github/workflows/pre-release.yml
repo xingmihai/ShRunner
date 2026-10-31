@@ -78,9 +78,10 @@ jobs:
           if [ "$TAG" = "${GITHUB_REF}" ]; then TAG="v0.1.0-${GITHUB_RUN_NUMBER}"; fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           mkdir -p out
-          for f in app/build/outputs/apk/release/*.apk; do
-            cp "$f" "out/ShRunner-${TAG}.apk"
-          done
+          find app/build/outputs -type f | head -40
+          APK=$(find app/build/outputs -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then echo "APK not found"; exit 1; fi
+          cp "$APK" "out/ShRunner-${TAG}.apk"
           ls -lh out
 
       - name: Publish pre-release
@@ -99,5 +100,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f ci-logs gradlew gradlew.bat gradle/wrapper 2>/dev/null || true
-          git commit -m "ci: diagnostics [skip ci]" || echo "nothing to commit"
+          git commit -m "ci: diagnostics + wrapper [skip ci]" || echo "nothing to commit"
+          git pull --rebase --autostash origin main || true
           git push || echo "push skipped"
