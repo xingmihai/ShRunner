@@ -34,7 +34,7 @@ Pre-release（自动构建）：每次推送到 `main`、推送 `v*` 标签或�
 ./gradlew :app:assembleRelease
 ```
 
-无 wrapper 时可直接用本地 Gradle 9.6.0：`gradle :app:assembleRelease`。
+仓库已带 Gradle Wrapper（9.6.0），直接用 `./gradlew` 即可；也可使用本地 Gradle 9.6.0：`gradle :app:assembleRelease`。
 Release 构建只有在项目根目录存在 `shrunner.jks` 时才会签名（CI 预发行时会临时生成），本地默认为未签名包。
 
 ## 权限说明

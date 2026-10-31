@@ -96,7 +96,7 @@ jobs:
           files: out/*.apk
 
       - name: Upload CI logs
-        if: always()
+        if: steps.apkbuild.outcome == 'failure'
         run: |
           mkdir -p ci-logs
           for f in ci-logs/*; do
@@ -109,15 +109,3 @@ jobs:
               "https://api.github.com/repos/${{ github.repository }}/contents/ci-logs/$NAME" \
               -d @/tmp/body.json > /dev/null
           done
-
-      - name: Commit Gradle wrapper
-        if: always()
-        run: |
-          if [ -f gradlew ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -f gradlew gradlew.bat gradle/wrapper
-            git commit -m "chore: add gradle wrapper [skip ci]" || echo "nothing to commit"
-            git pull --rebase --autostash origin main || true
-            git push origin HEAD:main || echo "push skipped"
-          fi
