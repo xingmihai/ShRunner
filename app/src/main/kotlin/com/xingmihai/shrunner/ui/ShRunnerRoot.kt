@@ -1,5 +1,7 @@
 package com.xingmihai.shrunner.ui
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import android.app.Application
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -183,13 +185,13 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                             rootMode = mode
                             com.xingmihai.shrunner.engine.ShellEnv.preferredMode = mode
                             com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            scope.launch(Dispatchers.IO) {
                                 com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
                             }
                         },
                         onReprobe = {
                             com.xingmihai.shrunner.engine.ShellEnv.resetProbe()
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            scope.launch(Dispatchers.IO) {
                                 com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
                             }
                         },
