@@ -76,7 +76,10 @@ jobs:
         id: apk
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if [ "$TAG" = "${GITHUB_REF}" ]; then TAG="v0.1.0-${GITHUB_RUN_NUMBER}"; fi
+          if [ "$TAG" = "${GITHUB_REF}" ]; then
+            VER=$(grep -m1 "versionName = " app/build.gradle.kts | sed -E 's/.*"(.*)".*/\1/')
+            TAG="v${VER:-0.1.0}-${GITHUB_RUN_NUMBER}"
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           mkdir -p ci-logs out
           { find app/build/outputs -type f | head -40; echo "--- ls ---"; ls -R app/build/outputs | head -40; } 2>&1 | tee ci-logs/rename.log
