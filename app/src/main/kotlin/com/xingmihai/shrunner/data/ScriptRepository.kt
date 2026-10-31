@@ -45,6 +45,8 @@ class ScriptRepository private constructor(private val app: Application) {
                 lastExitCode = readMeta(id).optIntOrNull(KEY_EXIT_CODE)
             )
         }
+        // id 用作 LazyColumn 的 key，必须唯一；同名不同后缀等极端情况下去重，避免崩溃
+        ?.distinctBy { it.id }
         ?.sortedWith(compareByDescending<ScriptEntry> { it.favorite }.thenByDescending { it.updatedAt })
         ?: emptyList()
 

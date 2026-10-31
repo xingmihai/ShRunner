@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
@@ -104,7 +104,9 @@ fun FileBrowserScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
-                items(items = entries, key = { it.path }) { entry ->
+                // key 必须唯一：不同 ROM 的 ls 可能吐出重复项，
+                // 直接用 path 当 key 有撞车风险，这里加上序号兜底
+                itemsIndexed(items = entries, key = { index, entry -> "$index|${entry.path}" }) { _, entry ->
                     FileRow(
                         entry = entry,
                         onClick = {
