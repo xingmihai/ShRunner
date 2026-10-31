@@ -171,21 +171,20 @@ object ShellEnv {
         val display: String
     )
 
-    fun buildCommand(mode: SuMode, su: String, shell: String, scriptPath: String, args: List<String>): CommandPlan {
+    fun buildCommand(
+        mode: SuMode,
+        su: String,
+        shell: String,
+        scriptPath: String,
+        args: List<String>,
+        prepared: String? = null
+    ): CommandPlan {
         val quotedArgs = args.joinToString(" ") { singleQuote(it) }
+        val payload = prepared ?: "$shell ${singleQuote(scriptPath)}$quotedArgs"
         return when (mode) {
-            SuMode.SU_C_SH -> {
-                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs"
-                CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
-            }
-            SuMode.SU_0_SH -> {
-                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs"
-                CommandPlan(listOf(su, "0", payload), null, "$su 0 '$payload'")
-            }
-            SuMode.SU_STDIN -> {
-                val payload = "$shell ${singleQuote(scriptPath)}$quotedArgs\nexit\n"
-                CommandPlan(listOf(su), payload, "$shell $scriptPath | su")
-            }
+            SuMode.SU_C_SH -> CommandPlan(listOf(su, "-c", payload), null, "$su -c '$payload'")
+            SuMode.SU_0_SH -> CommandPlan(listOf(su, "0", payload), null, "$su 0 '$payload'")
+            SuMode.SU_STDIN -> CommandPlan(listOf(su), "$payload\nexit\n", "$payload | su")
             SuMode.SESSION -> CommandPlan(emptyList(), null, "持久会话内执行")
         }
     }

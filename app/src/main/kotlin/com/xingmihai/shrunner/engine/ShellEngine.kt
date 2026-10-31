@@ -212,30 +212,17 @@ object ShellEngine {
                 }
                 request.workDir?.let { session.exec("cd " + ShellEnv.singleQuote(it), 8000) }
 
-                val queue = ConcurrentLinkedQueue(request.autoAnswers)
-                if (queue.isNotEmpty()) {
-                    appendSystem("自动应答已就绪：${request.autoAnswers.joinToString(" / ")}")
+                // 预填输入：把答案一次性塞进管道再启动脚本。
+                // 不能用「看到提问再回答」，脚本往往在我们写入前就读了，拿到 EOF 直接判定为取消，
+                // 迟到的答案还会被 shell 当成命令执行（y: not found）。
+                val command = buildScriptCommand(shell, scriptPath, request.args, request.autoAnswers)
+                if (request.autoAnswers.isNotEmpty()) {
+                    appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
                 }
-                answerWatcher = { line ->
-                    val answer = queue.peek()
-                    if (answer != null && looksLikePrompt(line)) {
-                        queue.poll()
-                        if (session.sendInput(answer)) appendSystem("自动应答 → $answer")
-                    }
-                }
-
-                val command = buildList {
-                    add(shell)
-                    add(ShellEnv.singleQuote(scriptPath))
-                    request.args.forEach { add(ShellEnv.singleQuote(it)) }
-                }.joinToString(" ")
 
                 val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
                 val code = session.exec(command, timeout) { line ->
-                    if (line.isNotEmpty()) {
-                        append(line, Stream.STDOUT)
-                        answerWatcher?.invoke(line)
-                    }
+                    if (line.isNotEmpty()) append(line, Stream.STDOUT)
                 }
                 val exit = code ?: return EXIT_TIMEOUT to false
                 exit to (exit == 0)
@@ -247,7 +234,8 @@ object ShellEngine {
         }
 
         // 一次性方式
-        val plan = ShellEnv.buildCommand(mode, su, shell, scriptPath, request.args)
+        val inner = buildScriptCommand(shell, scriptPath, request.args, request.autoAnswers)
+        val plan = ShellEnv.buildCommand(mode, su, shell, scriptPath, request.args, inner)
         val process = startProcess(request, plan)
         currentProcess = process
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
@@ -269,9 +257,14 @@ object ShellEngine {
     }
 
     private suspend fun executePlain(request: RunRequest, scriptPath: String): Pair<Int, Boolean> {
-        val argv = mutableListOf(ShellEnv.shellPath(), scriptPath)
-        argv.addAll(request.args)
-        val plan = ShellEnv.CommandPlan(argv, null, argv.joinToString(" "))
+        // 同样预填：把答案写进 shell 命令，由 sh 负责喂给脚本
+        val shell = ShellEnv.shellPath()
+        val inner = buildScriptCommand(shell, scriptPath, request.args, request.autoAnswers)
+        if (request.autoAnswers.isNotEmpty()) {
+            appendSystem("已预填输入：${request.autoAnswers.joinToString(" / ")}")
+        }
+        val argv = mutableListOf(shell, "-c", inner)
+        val plan = ShellEnv.CommandPlan(argv, null, inner)
         val process = startProcess(request, plan)
         currentProcess = process
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
@@ -289,6 +282,26 @@ object ShellEngine {
             return EXIT_TIMEOUT to false
         }
         return finished to true
+    }
+
+    /**
+     * 构造执行脚本的 shell 命令。
+     * 有预设答案时用 printf 管道预填：脚本读取时答案已在管道里，不会读到 EOF。
+     */
+    private fun buildScriptCommand(
+        shell: String,
+        scriptPath: String,
+        args: List<String>,
+        answers: List<String>
+    ): String {
+        val run = buildList {
+            add(shell)
+            add(ShellEnv.singleQuote(scriptPath))
+            args.forEach { add(ShellEnv.singleQuote(it)) }
+        }.joinToString(" ")
+        if (answers.isEmpty()) return run
+        val printfArgs = answers.joinToString(" ") { ShellEnv.singleQuote(it) }
+        return "printf '%s\\n' $printfArgs | $run"
     }
 
     private fun effectiveTimeout(request: RunRequest): Long =
