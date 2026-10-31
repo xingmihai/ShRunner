@@ -55,6 +55,18 @@ Release 构建只有在项目根目录存在 `shrunner.jks` 时才会签名（CI
 3. **本地网络与环回受限**：已声明 `ACCESS_LOCAL_NETWORK` 与 `USE_LOOPBACK_INTERFACE`。
 4. **无锁 MessageQueue、static final 不可反射修改、Parcel 校验增强**：代码不使用反射修改平台字段。
 
+## 排错（常见报错）
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 退出码 127 | 命令或解释器不存在 | 检查脚本首行 shebang（写 `#!/system/bin/sh`），路径是否存在 |
+| 退出码 126 | 没有执行权限或被 SELinux 拦截 | 需要 root 才能执行的命令请打开 root 开关 |
+| `gzip: not gzip` / `Cannot decompress` | 设备上的 `su` 是占位或损坏的一键 root 实现 | 应用启动 root 模式时会先跑 `su ... id` 探测，探测不到 uid=0 会自动退回非 root 并在输出里提示 |
+| 中文名脚本执行异常 | su 对非 ASCII 参数转码不一致 | 执行前会暂存为 `.stage/<ascii>.sh`，输出里会打印「已暂存到」 |
+| 脚本明明存在却 not found | Windows 换行符 `\r\n` | 暂存时统一转成 LF |
+
+每次运行都会在输出里打印一行 `[ShRunner] 实际命令：...`，把它复制出来用 `adb shell` 复现即可快速定位。
+
 ## 已知限制
 
 - 脚本存放在应用私有目录（`filesDir/scripts`），Android 10+ 分区存储限制下其他应用无法直接读取，需通过本应用导入。

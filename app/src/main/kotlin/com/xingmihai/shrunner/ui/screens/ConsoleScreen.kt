@@ -41,6 +41,10 @@ import com.xingmihai.shrunner.util.AnsiParser
 import com.xingmihai.shrunner.util.copyToClipboard
 import kotlinx.coroutines.delay
 
+private fun rootStatus(): String = ShellEnv.cachedRoot()?.let { probe ->
+    if (probe.ok) "可用（${probe.form}）" else "不可用（${probe.detail.take(20)}）"
+} ?: "未探测"
+
 @Composable
 fun ConsoleScreen(
     useRoot: Boolean,
@@ -99,7 +103,7 @@ fun ConsoleScreen(
         }
 
         Text(
-            text = "shell: ${ShellEnv.shellPath()} · root: ${if (ShellEnv.isRootAvailable()) "可用" else "不可用"} · 工具箱: ${ShellEnv.toolboxSummary()}",
+            text = "shell: ${ShellEnv.shellPath()} · root: ${rootStatus()} · 工具箱: ${ShellEnv.toolboxSummary()}",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(vertical = 8.dp)
         )

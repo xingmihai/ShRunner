@@ -82,7 +82,23 @@ object ShellEngine {
 
         var process: Process? = null
         try {
-            process = startProcess(request)
+            // 先修一遍换行符/shebang，再暂存到纯 ASCII 路径执行
+            val staged = runCatching { ShellEnv.stageScript(File(request.scriptPath), request.scriptId) }
+                .getOrDefault(File(request.scriptPath))
+            val scriptPath = ShellEnv.canonical(staged)
+            if (scriptPath != ShellEnv.canonical(File(request.scriptPath))) {
+                appendSystem("[ShRunner] 已暂存到：$scriptPath")
+            }
+            if (request.useRoot) {
+                val probe = ShellEnv.probeRoot()
+                if (!probe.ok) {
+                    appendSystem("[ShRunner] 警告：root 探测失败（${probe.detail}），本次按非 root 执行")
+                } else {
+                    appendSystem("[ShRunner] root 就绪：${probe.suPath} · ${probe.form}")
+                }
+            }
+
+            process = startProcess(request, scriptPath)
             currentProcess = process
 
             val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
@@ -99,7 +115,7 @@ object ShellEngine {
                 appendSystem("[ShRunner] 执行超时（${request.timeoutMs} ms），已终止进程")
                 _state.value = RunState.Finished(request.scriptName, EXIT_TIMEOUT, System.currentTimeMillis() - started)
             } else {
-                appendSystem("[ShRunner] 进程退出，退出码 $finished")
+                appendSystem("[ShRunner] 进程退出，退出码 $finished${exitHint(finished)}")
                 _state.value = RunState.Finished(request.scriptName, finished, System.currentTimeMillis() - started)
             }
         } catch (t: Throwable) {
@@ -116,24 +132,38 @@ object ShellEngine {
         if (request.timeoutMs <= 0L) Long.MAX_VALUE else request.timeoutMs
 
     private fun buildBanner(request: RunRequest): String {
-        val prefix = if (request.useRoot) "su -c sh" else "sh"
+        val prefix = if (request.useRoot) "root" else "sh"
         val args = if (request.args.isEmpty()) "" else " " + request.args.joinToString(" ")
         return "$ ${prefix} ${request.scriptPath}$args"
     }
 
-    private fun startProcess(request: RunRequest): Process {
+    /** 退出码含义提示，方便直接看懂 126 / 127 这类报错。 */
+    private fun exitHint(code: Int): String = when (code) {
+        EXIT_TIMEOUT -> "（执行超时被终止）"
+        126 -> "（无执行权限，检查 chmod / SELinux）"
+        127 -> "（命令或解释器未找到，检查 shebang 与路径）"
+        0 -> ""
+        else -> "（脚本自身返回）"
+    }
+
+    private fun buildCommand(request: RunRequest, scriptPath: String): List<String> {
         val shell = ShellEnv.shellPath()
-        val command = mutableListOf<String>()
-        if (request.useRoot) {
-            val su = ShellEnv.suPath() ?: error("未找到可用的 su，无法以 root 执行")
-            command += su
-            command += "-c"
-            command += "$shell \"${request.scriptPath}\""
+        val probe = if (request.useRoot) ShellEnv.probeRoot() else null
+        return if (probe != null && probe.ok && probe.suPath != null) {
+            val su = probe.suPath
+            val inner = ShellEnv.buildShellCommand(shell, scriptPath, request.args)
+            // 整条命令作为一个参数交给 su，避免多余参数被当成用户名/ARG0
+            if (probe.form == "su 0") listOf(su, "0", inner) else listOf(su, "-c", inner)
         } else {
-            command += shell
-            command += request.scriptPath
+            val command = mutableListOf(shell, scriptPath)
+            command.addAll(request.args)
+            command
         }
-        command += request.args
+    }
+
+    private fun startProcess(request: RunRequest, scriptPath: String): Process {
+        val command = buildCommand(request, scriptPath)
+        appendSystem("[ShRunner] 实际命令：" + command.joinToString(" ") { ShellEnv.singleQuote(it) })
 
         val builder = ProcessBuilder(command)
         val workDir = request.workDir
