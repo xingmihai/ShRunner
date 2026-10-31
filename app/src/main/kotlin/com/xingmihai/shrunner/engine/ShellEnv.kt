@@ -195,6 +195,109 @@ object ShellEnv {
         }
     }
 
+    /**
+     * root 诊断：逐个验证 su 到底能吃什么，把结果打回输出区。
+     * 用于定位「su -c 传脚本就报 gzip / Cannot decompress」这类设备专属问题。
+     */
+    fun diagnose(scriptPath: String?): List<String> {
+        val out = mutableListOf<String>()
+        val shell = shellPath()
+        val su = suPath()
+        out += "== ShRunner root 诊断 =="
+        out += "sh: $shell"
+        out += "su: ${su ?: "未找到"}"
+
+        if (su != null) {
+            runCatching {
+                val p = ProcessBuilder(listOf(shell, "-c", "ls -l $su")).redirectErrorStream(true).start()
+                val t = p.inputStream.bufferedReader().readText()
+                p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                out += "su 文件信息: ${t.trim().lineSequence().firstOrNull() ?: "无输出"}"
+            }
+        }
+
+        // 1) su 能否执行一条普通短命令
+        if (su != null) {
+            val r = runShort(listOf(su, "-c", "echo DIAG_ECHO_OK"))
+            out += if (r.first.contains("DIAG_ECHO_OK")) {
+                "① su -c 'echo' → 成功"
+            } else {
+                "① su -c 'echo' → 失败：${summarize(r)}"
+            }
+        }
+
+        // 2) 非 root 直接执行真实脚本，排除脚本自身问题
+        scriptPath?.let { path ->
+            val r = runShort(listOf(shell, path), timeoutSec = 20)
+            out += "② 非 root 执行脚本 → 退出码 ${r.second}｜${summarize(r)}"
+        }
+
+        // 3) 不同体积的探针脚本，找出 su 的容量上限
+        if (su != null) {
+            val dir = ensureStageDir()
+            if (dir != null) {
+                for (sizeKb in listOf(1, 64, 512, 4096)) {
+                    val f = runCatching {
+                        val file = File(dir, "diag_${sizeKb}k.sh")
+                        val body = "#!/system/bin/sh\necho DIAG_SIZE_OK_${sizeKb}K\n"
+                        file.writeText(body + ": > /dev/null\n" + "# ".repeat(1) + "pad\n".padEnd(2) +
+                            "#" + "x".repeat(sizeKb * 1024) + "\n")
+                        file.setExecutable(true, false)
+                        file
+                    }.getOrNull() ?: continue
+                    val r = runShort(listOf(su, "-c", "$shell ${f.absolutePath}"), timeoutSec = 20)
+                    out += if (r.first.contains("DIAG_SIZE_OK_${sizeKb}K")) {
+                        "③ ${sizeKb}KB 脚本 → 成功"
+                    } else {
+                        "③ ${sizeKb}KB 脚本 → 失败：${summarize(r)}"
+                    }
+                }
+            }
+        }
+
+        // 4) 持久 root shell 是否可用
+        if (su != null) {
+            val session = RootSession.open(su)
+            out += if (session != null) {
+                val idOut = runBlockingSession(session, "id")
+                session.close()
+                "④ 持久 root shell → 可用｜id: ${idOut?.firstOrNull { it.contains("uid=") } ?: "无输出"}"
+            } else {
+                "④ 持久 root shell → 不可用"
+            }
+        }
+
+        out += "== 诊断结束 =="
+        return out
+    }
+
+    private fun runBlockingSession(session: RootSession, cmd: String): List<String>? {
+        var result: List<String>? = null
+        val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            result = session.exec(cmd, 6000)
+        }
+        val start = System.currentTimeMillis()
+        while (job.isActive && System.currentTimeMillis() - start < 8000) {
+            Thread.sleep(50)
+        }
+        return result
+    }
+
+    private fun summarize(pair: Pair<String, Int>): String {
+        val lines = pair.first.lineSequence().filter { it.isNotBlank() }.toList()
+        val last = lines.lastOrNull()?.take(70) ?: "无输出"
+        return "$last（退出码 ${pair.second}）"
+    }
+
+    /** 执行短命令并取回 (输出, 退出码)。 */
+    private fun runShort(cmd: List<String>, timeoutSec: Long = 8): Pair<String, Int> = runCatching {
+        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
+        val text = process.inputStream.bufferedReader().readText()
+        val done = process.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
+        if (!done) process.destroy()
+        text to process.exitValue()
+    }.getOrDefault("" to -1)
+
     /** 只读缓存，避免在 UI 线程起进程。 */
     fun cachedRoot(): RootProbe? = cachedProbe
 

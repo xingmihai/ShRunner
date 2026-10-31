@@ -103,13 +103,26 @@ object ShellEngine {
             // 逐个候选方案尝试：退出 127 或出现 su 解码错误时自动换下一种
             val plans = candidatePlans(request, scriptPath)
             var lastExit = -1
+            var succeeded = false
             for ((index, plan) in plans.withIndex()) {
                 if (index > 0) {
                     appendSystem("[ShRunner] 上一种方式失败（退出 $lastExit），自动换用：${plan.display}")
                 }
                 val result = execute(request, plan)
                 lastExit = result.first
-                if (lastExit != 127 && !result.second) break
+                if (lastExit != 127 && !result.second) {
+                    succeeded = true
+                    break
+                }
+            }
+
+            // 所有一次性方案都失败 → 改用持久 root shell 逐条短命令执行
+            if (!succeeded && request.useRoot) {
+                val code = runViaRootSession(request, staged)
+                if (code != null) {
+                    lastExit = code
+                    succeeded = true
+                }
             }
 
             appendSystem("[ShRunner] 进程退出，退出码 $lastExit${exitHint(lastExit)}")
@@ -147,6 +160,41 @@ object ShellEngine {
             return EXIT_TIMEOUT to sawDecodeError
         }
         return finished to sawDecodeError
+    }
+
+    /**
+     * 兼容模式：启动一次 su 持久 shell，然后把脚本逐条短命令喂进去。
+     * 用于 su 无法一次性接受大脚本的设备。注意：跨行的 heredoc 结构可能不生效。
+     */
+    private suspend fun runViaRootSession(request: RunRequest, script: File): Int? {
+        val su = ShellEnv.suPath() ?: return null
+        val session = RootSession.open(su) ?: run {
+            appendSystem("[ShRunner] 兼容模式不可用：无法建立持久 root shell")
+            return null
+        }
+        appendSystem("[ShRunner] 启用兼容模式：${session.info()}，逐条短命令执行")
+        return try {
+            val lines = runCatching { script.readLines() }.getOrElse { return null }
+            var last = 0
+            lines.forEachIndexed { index, raw ->
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
+                val out = session.exec(line, 15_000)
+                out?.forEach { append(it, Stream.STDOUT) }
+                if (out == null) {
+                    appendSystem("[ShRunner] 兼容模式在第 ${index + 1} 行超时，已中止")
+                    return 1
+                }
+                last = 0
+            }
+            val exitOut = session.exec("echo EXIT_$?", 5000)
+            val code = exitOut?.firstOrNull { it.startsWith("EXIT_") }
+                ?.removePrefix("EXIT_")?.trim()?.toIntOrNull() ?: 0
+            appendSystem("[ShRunner] 兼容模式执行完毕")
+            code
+        } finally {
+            session.close()
+        }
     }
 
     /** 脚本体检：大小、换行、首行 shebang，快速判断是不是脚本自身的问题。 */
@@ -251,6 +299,15 @@ object ShellEngine {
         runCatching { currentProcess?.destroy() }
         currentProcess = null
         appendSystem("[ShRunner] 已收到停止指令")
+    }
+
+    /** 一键 root 诊断：把探测结果直接打到输出区。 */
+    fun diagnose(scriptPath: String?) {
+        scope.launch {
+            appendSystem("[ShRunner] 开始 root 诊断…")
+            val results = ShellEnv.diagnose(ShellEnv.canonical(File(scriptPath ?: "")))
+            results.forEach { appendSystem(it) }
+        }
     }
 
     fun clear() {

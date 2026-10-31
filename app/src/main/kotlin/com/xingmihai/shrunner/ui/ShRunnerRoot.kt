@@ -195,6 +195,14 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                                 com.xingmihai.shrunner.engine.ShellEnv.probeRoot(force = true)
                             }
                         },
+                        onDiagnose = {
+                            val id = editingId
+                            scope.launch(Dispatchers.IO) {
+                                com.xingmihai.shrunner.data.ScriptRepository.get(app).find(id ?: "")
+                                    ?.let { ShellEngine.diagnose(it.file.absolutePath) }
+                                    ?: ShellEngine.diagnose(null)
+                            }
+                        },
                         onStop = { ShellEngine.stop() },
                         onClear = { ShellEngine.clear() }
                     )

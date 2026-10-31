@@ -60,6 +60,7 @@ fun ConsoleScreen(
     rootMode: ShellEnv.SuMode?,
     onRootModeChange: (ShellEnv.SuMode?) -> Unit,
     onReprobe: () -> Unit,
+    onDiagnose: () -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
@@ -123,6 +124,7 @@ fun ConsoleScreen(
                 modifier = Modifier.weight(1f)
             )
             TextButton(onClick = onReprobe) { Text("重新探测") }
+            TextButton(onClick = onDiagnose) { Text("诊断 root") }
         }
 
         if (state is ShellEngine.RunState.Running) {
