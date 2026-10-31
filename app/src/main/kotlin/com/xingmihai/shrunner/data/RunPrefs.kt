@@ -22,6 +22,16 @@ class RunPrefs private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_USE_ROOT, false)
         set(value) = prefs.edit { putBoolean(KEY_USE_ROOT, value) }
 
+    /** 全局默认自动应答，脚本没有单独配置时使用。一行一个。 */
+    var autoAnswers: String
+        get() = prefs.getString(KEY_ANSWERS, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_ANSWERS, value) }
+
+    fun answers(): List<String> = autoAnswers.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toList()
+
     /** 高级：执行前打印脚本实际拿到的环境变量。 */
     var dumpEnv: Boolean
         get() = prefs.getBoolean(KEY_DUMP_ENV, false)
@@ -36,6 +46,7 @@ class RunPrefs private constructor(context: Context) {
         private const val KEY_CUSTOM_ENV = "custom_env"
         private const val KEY_USE_ROOT = "use_root"
         private const val KEY_DUMP_ENV = "dump_env"
+        private const val KEY_ANSWERS = "auto_answers"
         private const val KEY_VERBOSE = "verbose"
 
         @Volatile

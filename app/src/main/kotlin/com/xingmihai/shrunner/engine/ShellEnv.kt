@@ -189,6 +189,10 @@ object ShellEnv {
         }
     }
 
+    /** 是否可用 pty（script 命令存在）。部分脚本只接受终端输入，管道喂进去它不认。 */
+    fun hasPty(): Boolean = listOf("/system/bin/script", "/system/xbin/script", "/usr/bin/script")
+        .any { File(it).exists() }
+
     /** 该脚本对应的暂存目录，即被执行副本所在位置。 */
     fun stageDirOf(source: File): File =
         (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }

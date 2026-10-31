@@ -101,7 +101,9 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                 useRoot = root,
                 env = scriptConfig.envMap(id),
                 dumpEnv = runPrefs.dumpEnv,
-                autoAnswers = scriptConfig.answers(id)
+                // 脚本单独配置优先，没配置时回退全局默认
+                autoAnswers = scriptConfig.answers(id).takeIf { it.isNotEmpty() }
+                    ?: runPrefs.answers()
             )
         )
         tab = ShTab.CONSOLE
@@ -224,7 +226,9 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                     ShTab.FILES -> FileBrowserScreen(
                         onRun = { path ->
                             val file = File(path)
-                            requestRun(file.nameWithoutExtension, file.name, file.absolutePath)
+                            // 若该路径已导入过，沿用导入条目的 id，保证脚本配置（自动应答等）能命中
+                            val id = repo.findByName(file.name)?.id ?: file.nameWithoutExtension
+                            requestRun(id, file.name, file.absolutePath)
                         },
                         onImport = { path ->
                             scope.launch {

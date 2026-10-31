@@ -50,6 +50,12 @@ class ScriptRepository private constructor(private val app: Application) {
 
     fun find(id: String): ScriptEntry? = list().firstOrNull { it.id == id }
 
+    /** 按原始文件名反查已导入条目（文件浏览器直接执行时用）。 */
+    fun findByName(rawName: String): ScriptEntry? {
+        val id = normalizeId(rawName)
+        return list().firstOrNull { it.id == id }
+    }
+
     fun fileOf(id: String): File = File(dir, "$id.sh")
 
     fun create(rawName: String): ScriptEntry {
