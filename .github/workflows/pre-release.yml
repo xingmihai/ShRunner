@@ -87,11 +87,12 @@ jobs:
         run: |
           APK=$(find app/build/outputs -type f -name "*.apk" | head -n 1)
           echo "验证: $APK"
+          mkdir -p ci-logs
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | head -n 1)
           if [ -n "$APKSIGNER" ]; then
-            "$APKSIGNER" verify --print-certs "$APK" | head -20
+            "$APKSIGNER" verify --print-certs "$APK" 2>&1 | tee ci-logs/sign.log
           else
-            echo "未找到 apksigner"
+            echo "未找到 apksigner" | tee ci-logs/sign.log
           fi
 
       - name: Rename APK
