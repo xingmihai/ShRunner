@@ -1,0 +1,78 @@
+# ShRunner
+
+在 Android 上直接导入、编辑并运行 `.sh` 脚本，实时查看输出。自带执行引擎，不依赖 Termux。
+
+## 当前状态
+
+Pre-release（自动构建）：每次推送到 `main`、推送 `v*` 标签或手动触发工作流，都会构建 release APK 并发布为 GitHub Pre-release。
+
+## 功能
+
+- **脚本管理**：导入本地 `.sh`、新建、重命名、删除、收藏、记录上次运行时间与退出码
+- **执行引擎**：`/system/bin/sh` 直接执行，支持参数、工作目录、自定义环境变量、超时终止、手动停止；可选 root（`su -c`）模式
+- **实时输出**：等宽字体终端视图、ANSI 颜色解析、自动滚屏、复制输出
+- **编辑器**：Shell 关键字/注释/字符串/变量高亮，保存即写回脚本文件
+- **安全**：执行前扫描 `rm -rf`、`dd`、`mount`、`su` 等高风险命令并二次确认
+- **快捷方式**：把常用脚本固定到桌面，一键运行
+- **前台服务保活**：脚本运行期间显示常驻通知，避免后台被系统回收
+
+## 技术栈
+
+| 组件 | 版本 |
+| --- | --- |
+| Android Gradle Plugin | 9.4.0 |
+| Gradle | 9.6.0（JDK 17 运行） |
+| Kotlin | 2.2.21 |
+| Compose BOM | 2026.09.00 |
+| compileSdk / targetSdk | 37（Android 17） |
+| minSdk | 26（Android 8.0） |
+
+## 编译
+
+```bash
+# 需要 JDK 17
+./gradlew :app:assembleRelease
+```
+
+无 wrapper 时可直接用本地 Gradle 9.6.0：`gradle :app:assembleRelease`。
+Release 构建只有在项目根目录存在 `shrunner.jks` 时才会签名（CI 预发行时会临时生成），本地默认为未签名包。
+
+## 权限说明
+
+| 权限 | 用途 |
+| --- | --- |
+| `INTERNET` | 脚本可联网（curl/wget/ping 等） |
+| `ACCESS_NETWORK_STATE` | 执行前判断网络可用性 |
+| `ACCESS_LOCAL_NETWORK` | Android 17（API 37）起默认禁止本地网络访问，脚本访问局域网需此权限 |
+| `USE_LOOPBACK_INTERFACE` | Android 17（API 37）起访问 `127.0.0.1` / `::1` 需要此安装时权限 |
+| `FOREGROUND_SERVICE`（`specialUse`） | 脚本运行期间保活并显示通知 |
+| `POST_NOTIFICATIONS` | 显示运行状态通知 |
+
+## Android 17（targetSdk 37）适配要点
+
+1. **大屏自适应不可退出**：`screenOrientation`、`resizeableActivity`、宽高比限制在 `sw >= 600dp` 设备上被系统忽略，UI 使用自适应布局，不锁定方向。
+2. **配置变更默认不重建**：`CONFIG_KEYBOARD`、`CONFIG_UI_MODE`、`CONFIG_COLOR_MODE` 等不再默认重启 Activity，已在 Manifest 中显式声明 `configChanges` 并用 Compose 状态驱动 UI。
+3. **本地网络与环回受限**：已声明 `ACCESS_LOCAL_NETWORK` 与 `USE_LOOPBACK_INTERFACE`。
+4. **无锁 MessageQueue、static final 不可反射修改、Parcel 校验增强**：代码不使用反射修改平台字段。
+
+## 已知限制
+
+- 脚本存放在应用私有目录（`filesDir/scripts`），Android 10+ 分区存储限制下其他应用无法直接读取，需通过本应用导入。
+- 非 root 模式受 Android 应用沙箱与 SELinux 限制，部分命令（如访问 `/data/data/其他包`、`iptables`）会失败。
+- 长时间后台执行依赖前台服务，Android 12+ 不允许从后台启动前台服务，请在应用前台点击运行。
+- root 模式依赖设备上可用的 `su`。
+
+## 目录结构
+
+```
+app/src/main/kotlin/com/xingmihai/shrunner
+├── MainActivity.kt          入口，edge-to-edge
+├── engine/                  ShellEngine（执行）/ ShellEnv（探测）/ RunnerService（保活通知）
+├── data/                    ScriptRepository：脚本文件与元数据
+├── ui/                      ViewModel + 三个页面（脚本/编辑/输出）
+└── util/                    ANSI 解析、语法高亮、危险命令扫描、快捷方式
+```
+
+## 许可
+
+MIT
