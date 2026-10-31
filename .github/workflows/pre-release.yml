@@ -15,7 +15,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 固定镜像：ubuntu-latest 自 2026-10-19 起逐步迁移到 Ubuntu 26.04，
+    # 期间会持续打印迁移警告且系统库可能变化。这里锁定 24.04 保证构建可复现。
+    # 如需提前验证新镜像，改成 ubuntu-26.04 即可。
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7

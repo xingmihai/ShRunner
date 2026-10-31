@@ -38,6 +38,8 @@ Pre-release（自动构建）：每次推送到 `main`、推送 `v*` 标签或�
 | `gradle/actions/setup-gradle` | v6.4.1 |
 | `softprops/action-gh-release` | v3.0.3（node24） |
 
+Runner 固定为 `ubuntu-24.04`：`ubuntu-latest` 自 2026-10-19 起逐步迁移到 Ubuntu 26.04，锁定版本可避免迁移警告与系统库变化影响构建。
+
 ## 编译
 
 ```bash
