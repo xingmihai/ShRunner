@@ -286,14 +286,15 @@ object ShellEnv {
 
     /** 同步取一条命令的输出，用于诊断这种非协程场景。 */
     private fun runBlockingSession(session: RootSession, cmd: String): List<String>? {
-        var result: List<String>? = null
+        val collected = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var code: Int? = null
         val latch = java.util.concurrent.CountDownLatch(1)
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            result = session.exec(cmd, 6000)
+            code = session.exec(cmd, 6000) { line -> if (line.isNotEmpty()) collected += line }
             latch.countDown()
         }
         runCatching { latch.await(8, java.util.concurrent.TimeUnit.SECONDS) }
-        return result
+        return if (code == null) null else collected.toList()
     }
 
     private fun summarize(pair: Pair<String, Int>): String {
