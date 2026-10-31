@@ -27,6 +27,17 @@ Pre-release（自动构建）：每次推送到 `main`、推送 `v*` 标签或�
 | compileSdk / targetSdk | 37（Android 17） |
 | minSdk | 26（Android 8.0） |
 
+## CI 依赖版本
+
+工作流使用的 action 均固定大版本并跟进 Node 运行时（Node 20 已弃用）：
+
+| Action | 版本 |
+| --- | --- |
+| `actions/checkout` | v7 |
+| `actions/setup-java` | v6（Temurin JDK 17） |
+| `gradle/actions/setup-gradle` | v6.4.1 |
+| `softprops/action-gh-release` | v3.0.3（node24） |
+
 ## 编译
 
 ```bash
