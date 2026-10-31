@@ -51,6 +51,7 @@ fun ConsoleScreen(
     onUseRootChange: (Boolean) -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
+    onOpenAnswers: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lines by ShellEngine.lines.collectAsStateWithLifecycle()
@@ -94,6 +95,9 @@ fun ConsoleScreen(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { ShellEngine.lastRequest?.scriptId?.let(onOpenAnswers) }) {
+                Text("应答设置")
+            }
             Button(onClick = onStop) { Text("停止") }
             OutlinedButton(onClick = onClear) { Text("清空") }
             OutlinedButton(onClick = {

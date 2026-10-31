@@ -254,6 +254,10 @@ fun ShRunnerRoot(initialScriptId: String? = null) {
                             useRoot = it
                             runPrefs.useRoot = it
                         },
+                        onOpenAnswers = { id ->
+                            repo.find(id)?.let { settingsFor = it }
+                                ?: Toast.makeText(context, "该脚本不在列表里，请先导入", Toast.LENGTH_SHORT).show()
+                        },
                         onStop = { ShellEngine.stop() },
                         onClear = { ShellEngine.clear() }
                     )

@@ -61,6 +61,11 @@ object ShellEngine {
     @Volatile
     private var lastOkMode: ShellEnv.SuMode? = null
 
+    /** 最近一次执行请求，UI 用它打开对应脚本的应答设置。 */
+    @Volatile
+    var lastRequest: RunRequest? = null
+        private set
+
     private val _lines = MutableStateFlow<List<OutputLine>>(emptyList())
     val lines: StateFlow<List<OutputLine>> = _lines.asStateFlow()
 
@@ -94,6 +99,7 @@ object ShellEngine {
     private suspend fun runInternal(request: RunRequest) {
         _lines.value = emptyList()
         val started = System.currentTimeMillis()
+        lastRequest = request
         _state.value = RunState.Running(request.scriptName, started)
         appendSystem("$ ${if (request.useRoot) "root" else "sh"} ${request.scriptName}")
 
@@ -231,16 +237,31 @@ object ShellEngine {
                     plain
                 }
 
+                if (request.autoAnswers.isEmpty()) {
+                    // 没配自动应答时只做提示：这类脚本提问后立刻读输入，
+                    // 手动输入几乎来不及，提示用户去配自动应答后重跑
+                    val hinted = java.util.concurrent.atomic.AtomicBoolean(false)
+                    answerWatcher = { text ->
+                        if (!hinted.get() && text.isNotBlank() && promptKind(text) != null) {
+                            hinted.set(true)
+                            appendSystem("脚本正在等输入，但没配置自动应答。这类脚本读取极快，手动输入通常来不及")
+                            appendSystem("请到「脚本页 → 齿轮 → 自动应答」填答案后重跑")
+                        }
+                    }
+                }
+
                 val timeout = if (request.timeoutMs > 0) request.timeoutMs else 600_000
                 val code = session.exec(
                     command = command,
                     timeoutMs = timeout,
+                    onPartial = { text -> answerWatcher?.invoke(text.replace("\r", "")) },
                     onLine = { line ->
                         val clean = line.replace("\r", "")
                         if (clean.isNotEmpty()) {
                             append(clean, Stream.STDOUT)
+                            answerWatcher?.invoke(clean)
                         }
-                    },
+                    }
                 )
                 val exit = code ?: return EXIT_TIMEOUT to false
                 exit to (exit == 0)
