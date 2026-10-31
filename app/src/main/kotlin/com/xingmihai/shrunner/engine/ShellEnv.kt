@@ -448,6 +448,10 @@ object ShellEnv {
         target
     }.getOrNull()
 
+    /** 该脚本对应的暂存目录（.stage），即被执行副本所在位置。 */
+    fun stageDirOf(source: File): File =
+        (ensureStageDir() ?: File(source.parentFile, ".stage")).apply { mkdirs() }
+
     /** 取规范绝对路径，把 /data/user/0/... 归一为 /data/data/... */
     fun canonical(file: File): String =
         runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)

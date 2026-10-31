@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,7 +14,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +84,39 @@ fun EnvScreen(prefs: RunPrefs, modifier: Modifier = Modifier) {
             "让脚本读到的输入恒为空。脚本不需要交互、却一直卡在等待输入时打开。",
             style = MaterialTheme.typography.bodySmall
         )
+
+        HorizontalDivider()
+
+        Text("网络检测", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "脚本卡在「检查更新中」然后崩溃时，多半是它请求境外接口失败。先测一下是否可达，再决定要不要配代理。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        val scopeNet = rememberCoroutineScope()
+        var netResult by remember { mutableStateOf<List<String>>(emptyList()) }
+        Button(
+            onClick = {
+                scopeNet.launch {
+                    netResult = listOf("检测中…")
+                    netResult = com.xingmihai.shrunner.util.NetCheck.run()
+                }
+            },
+            modifier = Modifier.padding(top = 4.dp)
+        ) { Text("开始检测") }
+        if (netResult.isNotEmpty()) {
+            Text(
+                text = netResult.joinToString("\n"),
+                style = androidx.compose.ui.text.TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(8.dp)
+            )
+        }
 
         HorizontalDivider()
 
