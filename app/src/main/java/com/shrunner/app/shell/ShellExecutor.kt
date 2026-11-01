@@ -64,7 +64,7 @@ class ShellExecutor @Inject constructor(@ApplicationContext private val context:
     }
 }
 
-/** Android 上没有 JDK 9 的 Process.toHandle()，这里用反射尽力杀掉子进程。 */
+/** Android 上没有 JDK 9 的 ProcessHandle API，这里用反射尽力杀掉子进程。 */
 private fun destroyDescendants(process: Process) {
     runCatching {
         val handle = process.javaClass.getMethod("toHandle").invoke(process)
