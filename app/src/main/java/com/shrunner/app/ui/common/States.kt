@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import com.shrunner.app.R
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.ui.GlasmioButton
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -95,7 +96,7 @@ fun EmptyState(
 @Composable
 fun ErrorState(message: String?, onRetry: () -> Unit, modifier: Modifier = Modifier.fillMaxSize()) {
     EmptyState(Icons.Outlined.ErrorOutline, stringResource(R.string.error_title), message ?: stringResource(R.string.error_generic), modifier) {
-        Button(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+        GlasmioButton(onClick = onRetry, emphasis = GlassEmphasis.Prominent) { Text(stringResource(R.string.action_retry)) }
     }
 }
 

@@ -1,7 +1,8 @@
 package com.shrunner.app.shell
 
 import android.content.Context
-import android.os.Build
+import android.system.Os
+import android.system.OsConstants
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -20,16 +21,24 @@ sealed interface ShellEvent {
 }
 
 /**
- * Runs a script with the system shell (`/system/bin/sh <file>`), streaming stdout/stderr line by line.
- * Cancelling the collector kills the process (and its descendants on API 33+).
+ * Runs a script with the system shell, streaming stdout/stderr line by line.
+ * Cancelling the collector kills the script and every process it started (found via /proc).
  * The script runs with this app's UID: no root unless the device is rooted and the script calls `su`.
+ *
+ * Android has no java.lang.ProcessHandle, so the shell first writes its own PID to a file and then
+ * `exec`s the script shell, which keeps that PID. On Stop we walk /proc for its descendants.
  */
 @Singleton
 class ShellExecutor @Inject constructor(@ApplicationContext private val context: Context) {
 
     fun run(script: File, workDir: File): Flow<ShellEvent> = channelFlow {
         workDir.mkdirs()
-        val builder = ProcessBuilder("/system/bin/sh", script.absolutePath).directory(workDir)
+        val pidFile = File(context.cacheDir, "run/${System.nanoTime()}.pid").also { it.parentFile?.mkdirs() }
+        // $1 = pid file, $2 = script. `exec` keeps the PID that was just written.
+        val builder = ProcessBuilder(
+            "/system/bin/sh", "-c", "echo \$\$ > \"\$1\"; exec /system/bin/sh \"\$2\"",
+            "sh", pidFile.absolutePath, script.absolutePath,
+        ).directory(workDir)
         builder.environment().apply {
             put("HOME", workDir.absolutePath)
             put("TMPDIR", context.cacheDir.absolutePath)
@@ -52,25 +61,36 @@ class ShellExecutor @Inject constructor(@ApplicationContext private val context:
             withTimeoutOrNull(1_500) { readers.joinAll() }
             send(ShellEvent.Exit(code))
         } finally {
-            kill(process)
+            kill(process, pidFile)
         }
     }
 
-    private fun kill(process: Process) {
-        if (Build.VERSION.SDK_INT >= 33) {
-            destroyDescendants(process)
-        }
+    private fun kill(process: Process, pidFile: File) {
+        val pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull()
+        if (pid != null) killTree(pid)
         process.destroyForcibly()
+        pidFile.delete()
     }
-}
 
-/** Android 上没有 JDK 9 的 ProcessHandle API，这里用反射尽力杀掉子进程。 */
-private fun destroyDescendants(process: Process) {
-    runCatching {
-        val handle = process.javaClass.getMethod("toHandle").invoke(process)
-        val descendants = handle.javaClass.getMethod("descendants").invoke(handle)
-        (descendants as? java.util.stream.Stream<*>)?.forEach { child ->
-            runCatching { child.javaClass.getMethod("destroyForcibly").invoke(child) }
+    /** SIGKILLs [rootPid] and all its descendants, discovered by parent PID in /proc. */
+    private fun killTree(rootPid: Int) {
+        val children = HashMap<Int, MutableList<Int>>()
+        File("/proc").listFiles()?.forEach { dir ->
+            val pid = dir.name.toIntOrNull() ?: return@forEach
+            val ppid = runCatching { parentPid(File(dir, "stat").readText()) }.getOrNull() ?: return@forEach
+            children.getOrPut(ppid) { mutableListOf() }.add(pid)
         }
+        val victims = ArrayList<Int>()
+        val queue = ArrayDeque<Int>().apply { add(rootPid) }
+        while (queue.isNotEmpty()) {
+            val p = queue.removeFirst()
+            victims += p
+            children[p]?.let { queue.addAll(it) }
+        }
+        victims.forEach { runCatching { Os.kill(it, OsConstants.SIGKILL) } }
     }
+
+    /** /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may contain spaces or ')', so cut at the last ')'. */
+    private fun parentPid(stat: String): Int =
+        stat.substring(stat.lastIndexOf(')') + 2).split(' ')[1].toInt()
 }

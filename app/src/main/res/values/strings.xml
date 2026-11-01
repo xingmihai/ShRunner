@@ -74,8 +74,6 @@
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
-    <string name="settings_dynamic">动态取色</string>
-    <string name="settings_dynamic_desc">使用壁纸取色（Android 12 及以上）</string>
     <string name="settings_language">语言</string>
     <string name="danger_rm_recursive">递归删除（rm -r）</string>
     <string name="danger_find_delete">find -delete 批量删除</string>
@@ -101,4 +99,7 @@
     <string name="err_rename">无法重命名脚本。</string>
     <string name="err_delete">无法删除 %1$s。</string>
     <string name="err_save">无法保存 %1$s。</string>
+    <string name="settings_display">显示</string>
+    <string name="settings_reduce_transparency">降低透明度</string>
+    <string name="settings_reduce_transparency_desc">用不透明背景代替玻璃效果</string>
 </resources>

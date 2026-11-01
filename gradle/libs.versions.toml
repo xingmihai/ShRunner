@@ -1,12 +1,12 @@
-# AGP 9.x / Gradle 9.x / Kotlin 2.3 / compileSdk 37 were checked against current docs.
-# The AndroidX, Hilt, KSP and Room pins are best-effort: if sync complains, let Android
-# Studio's version-catalog quick-fix bump them to the latest stable.
+# Checked against published releases: AGP 9.2.1, Gradle 9.5.1, Kotlin 2.3.21, KSP 2.3.7, Hilt 2.59.2,
+# Compose BOM 2026.06.01, Navigation 2.9.x. The remaining AndroidX pins (activity, lifecycle, hilt-navigation,
+# room, datastore, core-ktx) are NOT verified: if one fails to resolve, bump it in Android Studio.
 [versions]
 agp = "9.2.1"
 kotlin = "2.3.21"
-ksp = "2.3.13"
+ksp = "2.3.7"
 hilt = "2.59.2"
-composeBom = "2026.09.00"
+composeBom = "2026.06.01"
 activityCompose = "1.12.0"
 lifecycle = "2.10.0"
 navigation = "2.9.6"
@@ -15,6 +15,7 @@ room = "2.8.4"
 datastore = "1.2.0"
 coreKtx = "1.17.0"
 junit = "4.13.2"
+glasmio = "0.1.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -34,6 +35,11 @@ hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt"
 hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
 androidx-hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavCompose" }
 junit = { module = "junit:junit", version.ref = "junit" }
+glasmio-core = { module = "io.github.neoruaa.glasmio:glasmio-core", version.ref = "glasmio" }
+glasmio-glass = { module = "io.github.neoruaa.glasmio:glasmio-glass", version.ref = "glasmio" }
+glasmio-ui = { module = "io.github.neoruaa.glasmio:glasmio-ui", version.ref = "glasmio" }
+glasmio-scaffold = { module = "io.github.neoruaa.glasmio:glasmio-scaffold", version.ref = "glasmio" }
+glasmio-preference = { module = "io.github.neoruaa.glasmio:glasmio-preference", version.ref = "glasmio" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

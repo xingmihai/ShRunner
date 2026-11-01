@@ -1,11 +1,7 @@
 package com.shrunner.app.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import android.os.Build
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.ui.platform.LocalContext
 import com.shrunner.app.data.ThemeMode
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -49,22 +45,11 @@ private val Dark = darkColorScheme(
 )
 
 @Composable
-fun ShRunnerTheme(
-    themeMode: ThemeMode = ThemeMode.SYSTEM,
-    dynamicColor: Boolean = false,
-    content: @Composable () -> Unit,
-) {
+fun ShRunnerTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
     val dark = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
     }
-    val context = LocalContext.current
-    val scheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= 31 ->
-            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> Dark
-        else -> Light
-    }
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = if (dark) Dark else Light, content = content)
 }

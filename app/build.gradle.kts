@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.shrunner.app"
-        minSdk = 26
+        minSdk = 33
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -48,6 +48,12 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
+
+    implementation(libs.glasmio.core)
+    implementation(libs.glasmio.glass)
+    implementation(libs.glasmio.ui)
+    implementation(libs.glasmio.scaffold)
+    implementation(libs.glasmio.preference)
 
     testImplementation(libs.junit)
 }

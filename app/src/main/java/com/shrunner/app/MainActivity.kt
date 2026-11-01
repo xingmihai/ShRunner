@@ -19,6 +19,7 @@ import com.shrunner.app.data.ThemeMode
 import com.shrunner.app.i18n.LocaleHelper
 import com.shrunner.app.system.Shortcuts
 import com.shrunner.app.ui.AppRoot
+import com.shrunner.app.ui.glass.GlassAppHost
 import com.shrunner.app.ui.theme.ShRunnerTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -40,7 +41,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) launchScript = scriptFrom(intent)
         setContent {
             val mode by settings.themeMode.collectAsStateWithLifecycle()
-            val dynamic by settings.dynamicColor.collectAsStateWithLifecycle()
+            val reduceTransparency by settings.reduceTransparency.collectAsStateWithLifecycle()
             val dark = when (mode) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false
@@ -54,8 +55,10 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose { }
             }
-            ShRunnerTheme(themeMode = mode, dynamicColor = dynamic) {
-                AppRoot(launchScript = launchScript, onLaunchConsumed = { launchScript = null })
+            ShRunnerTheme(themeMode = mode) {
+                GlassAppHost(dark = dark, reduceTransparency = reduceTransparency) {
+                    AppRoot(launchScript = launchScript, onLaunchConsumed = { launchScript = null })
+                }
             }
         }
     }

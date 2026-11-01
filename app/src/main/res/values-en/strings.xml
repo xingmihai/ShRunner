@@ -72,8 +72,6 @@
     <string name="theme_system">Follow system</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
-    <string name="settings_dynamic">Dynamic color</string>
-    <string name="settings_dynamic_desc">Use colors from your wallpaper (Android 12+)</string>
     <string name="settings_language">Language</string>
     <string name="danger_rm_recursive">Recursive delete (rm -r)</string>
     <string name="danger_find_delete">find -delete</string>
@@ -99,4 +97,7 @@
     <string name="err_rename">Couldn\'t rename the script.</string>
     <string name="err_delete">Couldn\'t delete %1$s.</string>
     <string name="err_save">Couldn\'t save %1$s.</string>
+    <string name="settings_display">Display</string>
+    <string name="settings_reduce_transparency">Reduce transparency</string>
+    <string name="settings_reduce_transparency_desc">Use solid backgrounds instead of the glass effect</string>
 </resources>

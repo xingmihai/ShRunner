@@ -22,11 +22,11 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
     private val _themeMode = MutableStateFlow(
         runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }.getOrDefault(ThemeMode.SYSTEM),
     )
-    private val _dynamicColor = MutableStateFlow(prefs.getBoolean(KEY_DYNAMIC, false))
+    private val _reduceTransparency = MutableStateFlow(prefs.getBoolean(KEY_REDUCE_TRANSPARENCY, false))
     private val _language = MutableStateFlow(readLanguage(context))
 
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
-    val dynamicColor: StateFlow<Boolean> = _dynamicColor.asStateFlow()
+    val reduceTransparency: StateFlow<Boolean> = _reduceTransparency.asStateFlow()
     val language: StateFlow<String> = _language.asStateFlow()
 
     fun setThemeMode(mode: ThemeMode) {
@@ -34,9 +34,9 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
         _themeMode.value = mode
     }
 
-    fun setDynamicColor(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_DYNAMIC, enabled).apply()
-        _dynamicColor.value = enabled
+    fun setReduceTransparency(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_REDUCE_TRANSPARENCY, enabled).apply()
+        _reduceTransparency.value = enabled
     }
 
     fun setLanguage(tag: String) {
@@ -53,7 +53,7 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
 
         private const val FILE = "settings"
         private const val KEY_THEME = "theme_mode"
-        private const val KEY_DYNAMIC = "dynamic_color"
+        private const val KEY_REDUCE_TRANSPARENCY = "reduce_transparency"
         private const val KEY_LANG = "language"
 
         fun readLanguage(context: Context): String =

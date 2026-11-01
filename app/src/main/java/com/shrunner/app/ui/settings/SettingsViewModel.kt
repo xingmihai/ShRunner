@@ -9,10 +9,10 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(private val store: SettingsStore) : ViewModel() {
     val themeMode = store.themeMode
-    val dynamicColor = store.dynamicColor
+    val reduceTransparency = store.reduceTransparency
     val language = store.language
 
     fun setThemeMode(mode: ThemeMode) = store.setThemeMode(mode)
-    fun setDynamicColor(enabled: Boolean) = store.setDynamicColor(enabled)
+    fun setReduceTransparency(enabled: Boolean) = store.setReduceTransparency(enabled)
     fun setLanguage(tag: String) = store.setLanguage(tag)
 }
