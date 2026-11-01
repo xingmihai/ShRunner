@@ -46,6 +46,43 @@ jobs:
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Probe available versions
+        run: |
+          mkdir -p ci-logs
+          ver() {
+            local path="$1"
+            for repo in "https://dl.google.com/dl/android/maven2" "https://repo1.maven.org/maven2"; do
+              out=$(curl -sf -m 25 "$repo/$path/maven-metadata.xml" || true)
+              if [ -n "$out" ]; then
+                latest=$(echo "$out" | grep -oPm1 '(?<=<latest>)[^<]+' || true)
+                release=$(echo "$out" | grep -oPm1 '(?<=<release>)[^<]+' || true)
+                echo "$path | latest=$latest | release=$release | repo=$repo"
+                return
+              fi
+            done
+            echo "$path | NOT FOUND in both repos"
+          }
+          {
+            echo "== 版本探测 =="
+            ver androidx/compose/compose-bom
+            ver androidx/compose/material3/material3
+            ver androidx/compose/material/material-icons-extended
+            ver androidx/activity/activity-compose
+            ver androidx/lifecycle/lifecycle-runtime-compose
+            ver androidx/lifecycle/lifecycle-viewmodel-compose
+            ver androidx/navigation/navigation-compose
+            ver androidx/datastore/datastore-preferences
+            ver androidx/room/room-runtime
+            ver androidx/room/room-ktx
+            ver androidx/room/room-compiler
+            ver androidx/core/core-ktx
+            ver androidx/hilt/hilt-navigation-compose
+            ver com/google/dagger/hilt-android
+            ver com/android/tools/build/gradle
+            ver com/google/devtools/ksp/symbol-processing-gradle-plugin
+            ver org/jetbrains/kotlin/kotlin-gradle-plugin
+          } | tee ci-logs/versions.log
+
       - name: Restore signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
