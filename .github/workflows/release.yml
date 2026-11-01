@@ -68,11 +68,11 @@ jobs:
 
       - name: Build release APK
         id: apkbuild
-        env:
-          ORG_GRADLE_PROJECT_ciBuild: "true"
         run: |
-          gradle --stacktrace :app:assembleRelease 2>&1 | tail -n 120
-          exit "${PIPESTATUS[0]}"
+          mkdir -p ci-logs
+          gradle --stacktrace :app:assembleRelease > ci-logs/build.log 2>&1
+          echo "exit=$?" >> ci-logs/build.log
+          tail -n 120 ci-logs/build.log
 
       - name: Locate APK
         id: apk
@@ -119,3 +119,26 @@ jobs:
           name: ShRunner-${{ steps.apk.outputs.tag }}
           path: out/*.apk
           retention-days: 30
+
+      - name: Upload CI logs
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ci-logs
+          if [ -z "$(ls -A ci-logs 2>/dev/null)" ]; then
+            find app/build -maxdepth 2 2>/dev/null > ci-logs/tree.log || true
+          fi
+          for f in ci-logs/*; do
+            [ -f "$f" ] || continue
+            NAME="$(basename "$f")-$GITHUB_RUN_ID.log"
+            B64=$(base64 -w0 "$f")
+            jq -n --arg m "ci: $NAME [skip ci]" --arg c "$B64" \
+              '{message:$m, content:$c}' > /tmp/body.json
+            curl -s -X PUT \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/contents/ci-logs/$NAME" \
+              -d @/tmp/body.json > /dev/null
+          done
+          echo "CI 日志已上传到 ci-logs/"
