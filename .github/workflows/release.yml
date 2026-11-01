@@ -243,8 +243,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          F="ci-logs/build-${{ github.run_id }}.log"
+          F="ci-logs/build.log"
           [ -f "$F" ] || exit 0
+          cp "$F" "ci-logs/build-${{ github.run_id }}.log"
+          F="ci-logs/build-${{ github.run_id }}.log"
           jq -n --arg m "ci: build log ${{ github.run_id }} [skip ci]" \
                 --arg c "$(base64 -w0 "$F")" \
                 '{message:$m, content:$c}' > /tmp/body.json
