@@ -54,33 +54,58 @@ jobs:
             for repo in "https://dl.google.com/dl/android/maven2" "https://repo1.maven.org/maven2"; do
               out=$(curl -sf -m 25 "$repo/$path/maven-metadata.xml" || true)
               if [ -n "$out" ]; then
-                latest=$(echo "$out" | grep -oPm1 '(?<=<latest>)[^<]+' || true)
-                release=$(echo "$out" | grep -oPm1 '(?<=<release>)[^<]+' || true)
-                echo "$path | latest=$latest | release=$release | repo=$repo"
+                stable=$(echo "$out" | grep -oP '(?<=<version>)[^<]+' \
+                  | grep -vE 'alpha|beta|rc|dev|Alpha|Beta|RC|-M[0-9]|SNAPSHOT' | tail -6 | tr '\n' ' ')
+                echo "$path | stable(last6)=$stable"
                 return
               fi
             done
-            echo "$path | NOT FOUND in both repos"
+            echo "$path | NOT FOUND"
+          }
+          has() {
+            local path="$1" want="$2"
+            for repo in "https://dl.google.com/dl/android/maven2" "https://repo1.maven.org/maven2"; do
+              out=$(curl -sf -m 25 "$repo/$path/maven-metadata.xml" || true)
+              if [ -n "$out" ]; then
+                if echo "$out" | grep -q "<version>$want</version>"; then
+                  echo "CHECK $want @ $path | EXISTS"
+                else
+                  echo "CHECK $want @ $path | MISSING"
+                fi
+                return
+              fi
+            done
+            echo "CHECK $want @ $path | NO METADATA"
           }
           {
-            echo "== 版本探测 =="
+            echo "== 稳定版探测 =="
             ver androidx/compose/compose-bom
             ver androidx/compose/material3/material3
             ver androidx/compose/material/material-icons-extended
             ver androidx/activity/activity-compose
             ver androidx/lifecycle/lifecycle-runtime-compose
-            ver androidx/lifecycle/lifecycle-viewmodel-compose
             ver androidx/navigation/navigation-compose
             ver androidx/datastore/datastore-preferences
             ver androidx/room/room-runtime
-            ver androidx/room/room-ktx
-            ver androidx/room/room-compiler
             ver androidx/core/core-ktx
             ver androidx/hilt/hilt-navigation-compose
             ver com/google/dagger/hilt-android
             ver com/android/tools/build/gradle
             ver com/google/devtools/ksp/symbol-processing-gradle-plugin
             ver org/jetbrains/kotlin/kotlin-gradle-plugin
+            echo "== 现有版本核对 =="
+            has androidx/compose/compose-bom 2026.04.00
+            has com/android/tools/build/gradle 9.2.1
+            has org/jetbrains/kotlin/kotlin-gradle-plugin 2.3.21
+            has com/google/devtools/ksp/symbol-processing-gradle-plugin 2.3.6
+            has com/google/dagger/hilt-android 2.59.2
+            has androidx/room/room-runtime 2.8.4
+            has androidx/navigation/navigation-compose 2.9.6
+            has androidx/lifecycle/lifecycle-runtime-compose 2.10.0
+            has androidx/activity/activity-compose 1.12.0
+            has androidx/core/core-ktx 1.17.0
+            has androidx/datastore/datastore-preferences 1.2.0
+            has androidx/hilt/hilt-navigation-compose 1.3.0
           } | tee ci-logs/versions.log
 
       - name: Restore signing keystore
