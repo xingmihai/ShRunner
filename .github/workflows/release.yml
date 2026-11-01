@@ -84,7 +84,10 @@ jobs:
               vs = re.findall(r"<version>([^<]+)</version>", meta)
               return [v for v in vs if not re.search(r"alpha|beta|rc|dev|snapshot|-M\d", v, re.I)]
 
-          def bump(toml, key, path, repos, prefix_from=None):
+          def keyfn(v):
+              return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v)[:3]]
+
+          def bump(toml, key, path, repos, prefix_from=None, min_version=None):
               m = re.search(rf'{key} = "([^"]+)"', toml)
               if not m:
                   return toml
@@ -100,11 +103,16 @@ jobs:
                   if pm:
                       pre = ".".join(pm.group(1).split(".")[:2])
                       vs = [v for v in vs if v.startswith(pre)] or vs
-              if not vs or cur in vs:
+              if not vs:
                   return toml
-              def keyfn(v):
-                  return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v)[:3]]
               new = sorted(vs, key=keyfn)[-1]
+              if cur in vs and min_version is None:
+                  return toml
+              # min_version：版本虽然存在，但低于已知可用下限（如 Hilt 读不了新 metadata）也要升
+              if min_version is not None and keyfn(cur) >= keyfn(min_version):
+                  return toml
+              if keyfn(cur) >= keyfn(new):
+                  return toml
               print(f"[autofix] {key}: {cur} -> {new}")
               return toml.replace(f'{key} = "{cur}"', f'{key} = "{new}"')
 
@@ -120,6 +128,10 @@ jobs:
                        ["https://dl.google.com/dl/android/maven2"])
               t = bump(t, "agp", "com/android/tools/build/gradle",
                        ["https://dl.google.com/dl/android/maven2"])
+              # Kotlin 2.3+ 生成的 metadata 版本是 2.4.0，Hilt 2.59 及更早读不了，最低要 2.60
+              t = bump(t, "hilt", "com/google/dagger/hilt-android",
+                       ["https://repo1.maven.org/maven2", "https://dl.google.com/dl/android/maven2"],
+                       min_version="2.60.0")
               toml_path.write_text(t)
 
           # Android 的 java.lang.Process 没有 JDK 9 的 toHandle()，改成反射
