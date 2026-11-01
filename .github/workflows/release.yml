@@ -1,124 +1,121 @@
-name: Build APK & Pre-release
+name: Pre-release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: '预发行标签，如 v0.1.0-pre.1（留空自动生成）'
-        required: false
-      version_name:
-        description: 'versionName，如 0.1.0-pre.1（留空用默认值）'
-        required: false
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pre-release-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  GRADLE_VERSION: 9.5.1
-  JAVA_VERSION: '21'
 
 jobs:
   build:
-    name: 构建 Release APK 并发布预发行
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - name: 拉取代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 配置 JDK ${{ env.JAVA_VERSION }}
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: "17"
 
-      - name: 配置 Gradle（依赖缓存）
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-37" "build-tools;36.0.0" 2>&1 | tail -n 5 || true
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Set up Gradle 9.6.0
+        run: |
+          curl -sSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.6.0-bin.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          sudo ln -sfn /opt/gradle-9.6.0 /opt/gradle
+          echo "/opt/gradle/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 仓库未提交 gradlew，这里按 gradle-wrapper.properties 的版本临时生成一份
-      - name: 准备 Gradle Wrapper
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ ! -x ./gradlew ]; then
-            echo "未检测到 gradlew，下载 Gradle $GRADLE_VERSION 生成 wrapper"
-            curl -sSL -o /tmp/gradle.zip \
-              "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
-            unzip -q /tmp/gradle.zip -d "$RUNNER_TEMP"
-            export PATH="$RUNNER_TEMP/gradle-$GRADLE_VERSION/bin:$PATH"
-            gradle wrapper --gradle-version "$GRADLE_VERSION" --distribution-type bin --no-daemon
-          fi
-          chmod +x ./gradlew
-          ./gradlew --version
-
-      - name: 解析版本与标签
-        id: meta
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="$GITHUB_REF_NAME"
-            VERSION="${GITHUB_REF_NAME#v}"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > shrunner-release.jks
+            echo "已恢复签名文件（$(stat -c%s shrunner-release.jks) 字节）"
+            {
+              echo "KEYSTORE_FILE=$PWD/shrunner-release.jks"
+              echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "KEY_ALIAS=$KEY_ALIAS"
+              echo "KEY_PASSWORD=$KEY_PASSWORD"
+            } >> local.properties
           else
-            TAG="${{ inputs.tag }}"
-            VERSION="${{ inputs.version_name }}"
-            [ -z "$TAG" ] && TAG="v0.1.0-pre.${GITHUB_RUN_NUMBER}"
-            [ -z "$VERSION" ] && VERSION="${TAG#v}"
+            echo "未配置签名 secrets，本次用 debug 签名打可安装包"
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "构建 $TAG / versionName=$VERSION"
 
-      # 没有配置签名密钥时自动跳过，构建会回落到 debug 密钥，产物仍可安装
-      - name: 准备签名密钥（可选）
-        id: sign
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+      - name: Build release APK
+        id: apkbuild
+        env:
+          ORG_GRADLE_PROJECT_ciBuild: "true"
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/shrunner.jks"
-          echo "store=$RUNNER_TEMP/shrunner.jks" >> "$GITHUB_OUTPUT"
+          gradle --stacktrace :app:assembleRelease 2>&1 | tail -n 120
+          exit "${PIPESTATUS[0]}"
 
-      - name: 构建 Release APK
-        run: |
-          ARGS=(-PVERSION_NAME="${{ steps.meta.outputs.version }}")
-          if [ -n "${{ steps.sign.outputs.store }}" ]; then
-            ARGS+=(
-              -PKEYSTORE_PATH="${{ steps.sign.outputs.store }}"
-              -PKEYSTORE_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
-              -PKEY_ALIAS="${{ secrets.KEY_ALIAS }}"
-              -PKEY_PASSWORD="${{ secrets.KEY_PASSWORD }}"
-            )
-          fi
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace "${ARGS[@]}"
-
-      - name: 整理产物
+      - name: Locate APK
         id: apk
         run: |
-          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then echo "::error::未找到 APK 产物"; exit 1; fi
-          OUT="ShRunner-${{ steps.meta.outputs.version }}.apk"
-          cp "$APK" "$OUT"
-          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
-          echo "sha=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          APK=$(find app/build/outputs -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "未找到 APK，列出输出目录："
+            find app/build/outputs -maxdepth 3 2>/dev/null || true
+            exit 1
+          fi
+          echo "找到: $APK"
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VER=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"(.*)".*/\1/')
+            TAG="v${VER:-0.1.0}-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          mkdir -p out
+          cp "$APK" "out/ShRunner-${TAG}.apk"
+          ls -lh out
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: ShRunner-${{ steps.meta.outputs.version }}
-          path: ${{ steps.apk.outputs.apk }}
-          retention-days: 30
+      - name: Verify signature
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | head -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "未找到 apksigner，跳过验证"
+            exit 0
+          fi
+          "$APKSIGNER" verify --print-certs out/*.apk 2>&1 | head -n 20
 
-      - name: 发布到预发行
+      - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ShRunner ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ steps.apk.outputs.tag }}
+          name: ShRunner ${{ steps.apk.outputs.tag }}
           prerelease: true
           generate_release_notes: true
-          files: ${{ steps.apk.outputs.apk }}
-          body: |
-            预发行版本（Pre-release），由 GitHub Actions 自动构建。
-            - 提交：`${{ github.sha }}`
-            - 签名：${{ steps.sign.outputs.store != '' && '正式签名' || 'Debug 签名（仅供测试安装）' }}
-            - SHA-256：`${{ steps.apk.outputs.sha }}`
+          files: out/*.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShRunner-${{ steps.apk.outputs.tag }}
+          path: out/*.apk
+          retention-days: 30
