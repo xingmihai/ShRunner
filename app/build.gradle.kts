@@ -7,13 +7,19 @@ plugins {
 }
 
 // CI 把签名信息写进 local.properties（KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD）
-val keystoreProps = java.util.Properties().apply {
+// 这里只用 Kotlin 标准库解析，避免在 kts 脚本里引用 java.util.Properties（Kotlin DSL 解析不了）
+fun localProp(name: String): String? {
     val f = rootProject.file("local.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
+    if (!f.exists()) return null
+    return f.readLines()
+        .firstOrNull { it.trimStart().startsWith("$name=") }
+        ?.substringAfter("=")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
 }
-fun keystoreProp(key: String): String? =
-    (project.findProperty(key) as String?)?.takeIf { it.isNotBlank() }
-        ?: keystoreProps.getProperty(key)?.takeIf { it.isNotBlank() }
+
+fun signProp(name: String): String? =
+    (project.findProperty(name) as String?)?.takeIf { it.isNotBlank() } ?: localProp(name)
 
 android {
     namespace = "com.shrunner.app"
@@ -28,13 +34,13 @@ android {
     }
 
     signingConfigs {
-        val ksFile = keystoreProp("KEYSTORE_FILE")
+        val ksFile = signProp("KEYSTORE_FILE")
         if (ksFile != null && file(ksFile).exists()) {
             create("release") {
                 storeFile = file(ksFile)
-                storePassword = keystoreProp("KEYSTORE_PASSWORD")
-                keyAlias = keystoreProp("KEY_ALIAS")
-                keyPassword = keystoreProp("KEY_PASSWORD")
+                storePassword = signProp("KEYSTORE_PASSWORD")
+                keyAlias = signProp("KEY_ALIAS")
+                keyPassword = signProp("KEY_PASSWORD")
             }
         }
     }
