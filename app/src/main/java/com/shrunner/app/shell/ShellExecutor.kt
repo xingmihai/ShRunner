@@ -58,8 +58,19 @@ class ShellExecutor @Inject constructor(@ApplicationContext private val context:
 
     private fun kill(process: Process) {
         if (Build.VERSION.SDK_INT >= 33) {
-            runCatching { process.toHandle().descendants().forEach { it.destroyForcibly() } }
+            destroyDescendants(process)
         }
         process.destroyForcibly()
+    }
+}
+
+/** Android 上没有 JDK 9 的 Process.toHandle()，这里用反射尽力杀掉子进程。 */
+private fun destroyDescendants(process: Process) {
+    runCatching {
+        val handle = process.javaClass.getMethod("toHandle").invoke(process)
+        val descendants = handle.javaClass.getMethod("descendants").invoke(handle)
+        (descendants as? java.util.stream.Stream<*>)?.forEach { child ->
+            runCatching { child.javaClass.getMethod("destroyForcibly").invoke(child) }
+        }
     }
 }
