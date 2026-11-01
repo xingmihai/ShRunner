@@ -125,7 +125,12 @@ jobs:
           # Android 的 java.lang.Process 没有 JDK 9 的 toHandle()，改成反射
           for p in pathlib.Path("app/src").rglob("*.kt"):
               s = p.read_text()
-              if ".toHandle()" not in s:
+              # 只看代码行，注释里提到 toHandle() 不算
+              code = "\n".join(
+                  l for l in s.splitlines()
+                  if not l.strip().startswith(("*", "//", "/*"))
+              )
+              if not re.search(r"\.toHandle\(\)", code) or "fun destroyDescendants" in s:
                   continue
               s = s.replace(
                   "process.toHandle().descendants().forEach { it.destroyForcibly() }",
