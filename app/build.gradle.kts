@@ -14,12 +14,27 @@ android {
         applicationId = "com.shrunner.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = (providers.gradleProperty("VERSION_CODE").orNull ?: "1").toInt()
+        versionName = providers.gradleProperty("VERSION_NAME").orNull ?: "0.1.0"
+    }
+
+    signingConfigs {
+        // CI 通过 -PKEYSTORE_PATH / -PKEYSTORE_PASSWORD / -PKEY_ALIAS / -PKEY_PASSWORD 注入
+        val ksPath = providers.gradleProperty("KEYSTORE_PATH").orNull
+        if (!ksPath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(ksPath)
+                storePassword = providers.gradleProperty("KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.gradleProperty("KEY_ALIAS").orNull
+                keyPassword = providers.gradleProperty("KEY_PASSWORD").orNull
+            }
+        }
     }
 
     buildTypes {
         release {
+            // 有正式密钥则用它签名，否则回落到 debug 密钥，保证 CI 产物可直接安装
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
