@@ -37,6 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
+import com.shrunner.app.ui.common.dangerLabelRes
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,12 +65,12 @@ fun HistoryScreen(vm: HistoryViewModel = hiltViewModel()) {
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
-                title = { Text("History") },
+                title = { Text(stringResource(R.string.nav_history)) },
                 actions = {
                     val s = state
                     if (s is UiState.Success && s.data.isNotEmpty()) {
                         IconButton(onClick = { confirmClear = true }) {
-                            Icon(Icons.Filled.DeleteSweep, contentDescription = "Clear history")
+                            Icon(Icons.Filled.DeleteSweep, contentDescription = stringResource(R.string.cd_clear_history))
                         }
                     }
                 },
@@ -81,8 +84,8 @@ fun HistoryScreen(vm: HistoryViewModel = hiltViewModel()) {
                 is UiState.Success ->
                     if (s.data.isEmpty()) {
                         EmptyState(
-                            Icons.Filled.History, "No runs yet",
-                            "Every run, stop and declined warning is logged here.",
+                            Icons.Filled.History, stringResource(R.string.history_empty_title),
+                            stringResource(R.string.history_empty_msg),
                         )
                     } else {
                         LazyColumn(
@@ -99,10 +102,10 @@ fun HistoryScreen(vm: HistoryViewModel = hiltViewModel()) {
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("Clear history?") },
-            text = { Text("The audit log will be erased. Approved dangerous commands stay approved.") },
-            confirmButton = { TextButton(onClick = { confirmClear = false; vm.clear() }) { Text("Clear") } },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+            title = { Text(stringResource(R.string.clear_title)) },
+            text = { Text(stringResource(R.string.clear_msg)) },
+            confirmButton = { TextButton(onClick = { confirmClear = false; vm.clear() }) { Text(stringResource(R.string.action_clear)) } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 }
@@ -112,10 +115,10 @@ private fun HistoryCard(entry: HistoryEntry) {
     val context = LocalContext.current
     var expanded by rememberSaveable(entry.id) { mutableStateOf(false) }
     val (label, color) = when (entry.status) {
-        RunStatus.COMPLETED -> "Completed" to MaterialTheme.colorScheme.tertiary
-        RunStatus.FAILED -> "Failed" to MaterialTheme.colorScheme.error
-        RunStatus.STOPPED -> "Stopped" to MaterialTheme.colorScheme.onSurfaceVariant
-        RunStatus.DECLINED -> "Declined" to MaterialTheme.colorScheme.onSurfaceVariant
+        RunStatus.COMPLETED -> stringResource(R.string.status_completed) to MaterialTheme.colorScheme.tertiary
+        RunStatus.FAILED -> stringResource(R.string.status_failed) to MaterialTheme.colorScheme.error
+        RunStatus.STOPPED -> stringResource(R.string.status_stopped) to MaterialTheme.colorScheme.onSurfaceVariant
+        RunStatus.DECLINED -> stringResource(R.string.status_declined) to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Card(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -129,18 +132,25 @@ private fun HistoryCard(entry: HistoryEntry) {
             val meta = buildList {
                 add(formatDate(context, entry.startedAt))
                 if (entry.status != RunStatus.DECLINED) add(formatDuration(entry.durationMs))
-                entry.exitCode?.let { add("exit $it") }
+                entry.exitCode?.let { add(context.getString(R.string.history_exit, it)) }
             }.joinToString(" · ")
             Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (entry.dangerLabels.isNotEmpty()) {
+            if (entry.dangerRules.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Icon(Icons.Filled.Warning, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                    Text("Flagged: ${entry.dangerLabels}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        stringResource(
+                            R.string.flagged,
+                            entry.dangerRules.split(",").filter { it.isNotEmpty() }
+                                .joinToString("; ") { context.getString(dangerLabelRes(it)) },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
             AnimatedVisibility(expanded) {
                 Text(
-                    entry.outputTail.ifEmpty { "(no output captured)" },
+                    if (entry.outputTail.isEmpty()) stringResource(R.string.no_output_captured) else entry.outputTail,
                     fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),

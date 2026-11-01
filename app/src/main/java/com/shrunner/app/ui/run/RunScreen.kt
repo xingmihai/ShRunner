@@ -49,6 +49,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
+import com.shrunner.app.ui.common.dangerLabelRes
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,7 +83,7 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                 title = { Text(vm.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { if (running) confirmLeave = true else onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back))
                     }
                 },
                 actions = {
@@ -88,7 +91,7 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                         IconButton(onClick = {
                             val cm = context.getSystemService(ClipboardManager::class.java)
                             cm.setPrimaryClip(ClipData.newPlainText("ShRunner output", vm.outputText()))
-                        }) { Icon(Icons.Filled.ContentCopy, contentDescription = "Copy output") }
+                        }) { Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.cd_copy_output)) }
                     }
                 },
             )
@@ -101,7 +104,7 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                 StatusRow(phase)
                 Console(
                     lines = vm.lines,
-                    placeholder = if (phase is RunPhase.Ready) "Ready. Output will appear here." else "No output.",
+                    placeholder = stringResource(if (phase is RunPhase.Ready) R.string.run_ready_placeholder else R.string.run_no_output),
                     modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
                 )
                 Box(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -115,13 +118,13 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                             ),
                         ) {
                             Icon(Icons.Filled.Stop, null, Modifier.size(18.dp))
-                            Text("  Stop")
+                            Text("  ${stringResource(R.string.action_stop)}")
                         }
                     } else {
                         Button(onClick = vm::requestRun, modifier = Modifier.fillMaxWidth()) {
                             val again = phase is RunPhase.Finished
                             Icon(if (again) Icons.Filled.Replay else Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
-                            Text(if (again) "  Run again" else "  Run")
+                            Text("  ${stringResource(if (again) R.string.action_run_again else R.string.action_run)}")
                         }
                     }
                 }
@@ -133,12 +136,11 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
         AlertDialog(
             onDismissRequest = vm::decline,
             icon = { Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-            title = { Text("Potentially dangerous commands") },
+            title = { Text(stringResource(R.string.danger_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "This script will run with ShRunner's permissions. Approving remembers these exact lines; " +
-                            "any change to them asks again.",
+                        stringResource(R.string.danger_msg),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     LazyColumn(
@@ -148,7 +150,7 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                     ) {
                         items(hits) { hit ->
                             Column {
-                                Text(hit.label, color = ConsoleErr, fontSize = 12.sp)
+                                Text(stringResource(dangerLabelRes(hit.ruleId)), color = ConsoleErr, fontSize = 12.sp)
                                 Text(
                                     "${hit.lineNumber}: ${hit.line}",
                                     color = ConsoleFg, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
@@ -158,20 +160,20 @@ fun RunScreen(onBack: () -> Unit, vm: RunViewModel = hiltViewModel()) {
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = vm::confirm) { Text("Run anyway") } },
-            dismissButton = { TextButton(onClick = vm::decline) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = vm::confirm) { Text(stringResource(R.string.action_run_anyway)) } },
+            dismissButton = { TextButton(onClick = vm::decline) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
     if (confirmLeave) {
         AlertDialog(
             onDismissRequest = { confirmLeave = false },
-            title = { Text("Stop the script?") },
-            text = { Text("Leaving this screen stops the running script.") },
+            title = { Text(stringResource(R.string.leave_title)) },
+            text = { Text(stringResource(R.string.leave_msg)) },
             confirmButton = {
-                TextButton(onClick = { confirmLeave = false; vm.stop(); onBack() }) { Text("Stop and leave") }
+                TextButton(onClick = { confirmLeave = false; vm.stop(); onBack() }) { Text(stringResource(R.string.action_stop_leave)) }
             },
-            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Keep running") } },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text(stringResource(R.string.action_keep_running)) } },
         )
     }
 }
@@ -181,7 +183,7 @@ private fun StatusRow(phase: RunPhase) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when (phase) {
-                RunPhase.Running -> Text("Running…", style = MaterialTheme.typography.labelLarge)
+                RunPhase.Running -> Text(stringResource(R.string.status_running), style = MaterialTheme.typography.labelLarge)
                 is RunPhase.Finished -> {
                     val ok = phase.status == RunStatus.COMPLETED
                     Icon(
@@ -190,17 +192,17 @@ private fun StatusRow(phase: RunPhase) {
                         tint = if (ok) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
                     )
                     val label = when (phase.status) {
-                        RunStatus.COMPLETED -> "Completed"
-                        RunStatus.FAILED -> "Failed"
-                        RunStatus.STOPPED -> "Stopped"
-                        RunStatus.DECLINED -> "Declined"
+                        RunStatus.COMPLETED -> stringResource(R.string.status_completed)
+                        RunStatus.FAILED -> stringResource(R.string.status_failed)
+                        RunStatus.STOPPED -> stringResource(R.string.status_stopped)
+                        RunStatus.DECLINED -> stringResource(R.string.status_declined)
                     }
                     Text(
-                        if (phase.exitCode != null) "$label · exit code ${phase.exitCode}" else label,
+                        if (phase.exitCode != null) stringResource(R.string.status_with_exit, label, phase.exitCode) else label,
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }
-                else -> Text("Ready", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> Text(stringResource(R.string.status_ready), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (phase == RunPhase.Running) {

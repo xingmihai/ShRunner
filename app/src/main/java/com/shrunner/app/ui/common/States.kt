@@ -20,6 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -35,19 +37,19 @@ import kotlinx.coroutines.launch
 
 sealed interface UiState<out T> {
     data object Loading : UiState<Nothing>
-    data class Error(val message: String) : UiState<Nothing>
+    data class Error(val message: String?) : UiState<Nothing>
     data class Success<T>(val data: T) : UiState<T>
 }
 
 fun <T> Flow<T>.asUiState(): Flow<UiState<T>> =
     map<T, UiState<T>> { UiState.Success(it) }
         .onStart { emit(UiState.Loading) }
-        .catch { emit(UiState.Error(it.message ?: "Something went wrong")) }
+        .catch { emit(UiState.Error(it.message)) }
 
 /** Base class: one-shot user messages (snackbars) and a safe launcher that reports failures. */
 abstract class BaseViewModel : ViewModel() {
-    private val _messages = Channel<String>(Channel.BUFFERED)
-    val messages: Flow<String> = _messages.receiveAsFlow()
+    private val _messages = Channel<String?>(Channel.BUFFERED)
+    val messages: Flow<String?> = _messages.receiveAsFlow()
 
     protected fun launchCatching(block: suspend () -> Unit) = viewModelScope.launch {
         try {
@@ -55,7 +57,7 @@ abstract class BaseViewModel : ViewModel() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _messages.send(e.message ?: "Something went wrong")
+            _messages.send(e.message)
         }
     }
 }
@@ -91,9 +93,9 @@ fun EmptyState(
 }
 
 @Composable
-fun ErrorState(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier.fillMaxSize()) {
-    EmptyState(Icons.Outlined.ErrorOutline, "Something went wrong", message, modifier) {
-        Button(onClick = onRetry) { Text("Try again") }
+fun ErrorState(message: String?, onRetry: () -> Unit, modifier: Modifier = Modifier.fillMaxSize()) {
+    EmptyState(Icons.Outlined.ErrorOutline, stringResource(R.string.error_title), message ?: stringResource(R.string.error_generic), modifier) {
+        Button(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
     }
 }
 

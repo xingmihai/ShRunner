@@ -33,6 +33,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -53,7 +55,8 @@ fun EditorScreen(
 ) {
     var confirmDiscard by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it) } }
+    val genericError = stringResource(R.string.error_generic)
+    LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it ?: genericError) } }
 
     BackHandler(enabled = vm.dirty) { confirmDiscard = true }
 
@@ -68,18 +71,18 @@ fun EditorScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = { if (vm.dirty) confirmDiscard = true else onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back))
                     }
                 },
                 actions = {
                     IconButton(onClick = { vm.save() }, enabled = vm.dirty) {
-                        Icon(Icons.Filled.Save, contentDescription = "Save")
+                        Icon(Icons.Filled.Save, contentDescription = stringResource(R.string.action_save))
                     }
                     IconButton(
                         onClick = { if (vm.dirty) vm.save { onRun(vm.name) } else onRun(vm.name) },
                         enabled = vm.loadState is UiState.Success,
                     ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = "Run")
+                        Icon(Icons.Filled.PlayArrow, contentDescription = stringResource(R.string.action_run))
                     }
                 },
             )
@@ -115,13 +118,13 @@ fun EditorScreen(
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard changes?") },
-            text = { Text("You have unsaved changes to ${vm.name}.") },
+            title = { Text(stringResource(R.string.discard_title)) },
+            text = { Text(stringResource(R.string.discard_msg, vm.name)) },
             confirmButton = {
-                TextButton(onClick = { confirmDiscard = false; vm.save { onBack() } }) { Text("Save") }
+                TextButton(onClick = { confirmDiscard = false; vm.save { onBack() } }) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDiscard = false; onBack() }) { Text("Discard") }
+                TextButton(onClick = { confirmDiscard = false; onBack() }) { Text(stringResource(R.string.action_discard)) }
             },
         )
     }

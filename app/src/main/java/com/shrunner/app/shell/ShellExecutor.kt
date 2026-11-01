@@ -58,16 +58,8 @@ class ShellExecutor @Inject constructor(@ApplicationContext private val context:
 
     private fun kill(process: Process) {
         if (Build.VERSION.SDK_INT >= 33) {
-            // Android 的 java.lang.Process 没有 toHandle()，这里走反射：
-            // 拿不到 ProcessHandle 就直接跳过，不影响主进程的销毁
-            runCatching {
-                val handle = process.javaClass.getMethod("toHandle").invoke(process)
-                val descendants = handle.javaClass.getMethod("descendants").invoke(handle)
-                (descendants as? java.util.stream.Stream<*>)?.forEach { child ->
-                    runCatching { child.javaClass.getMethod("destroyForcibly").invoke(child) }
-                }
-            }
+            runCatching { process.toHandle().descendants().forEach { it.destroyForcibly() } }
         }
-        runCatching { process.destroyForcibly() }
+        process.destroyForcibly()
     }
 }

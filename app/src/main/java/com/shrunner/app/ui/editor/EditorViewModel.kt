@@ -42,7 +42,7 @@ class EditorViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                UiState.Error(e.message ?: "Couldn't open the script.")
+                UiState.Error(e.message)
             }
         }
     }

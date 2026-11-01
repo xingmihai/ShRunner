@@ -5,5 +5,3 @@
 /build/
 /app/build/
 .DS_Store
-ci-logs/
-*.jks

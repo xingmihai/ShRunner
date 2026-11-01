@@ -15,7 +15,6 @@ enum class RunStatus { COMPLETED, FAILED, STOPPED, DECLINED }
 /** One dangerous-looking line found by [com.shrunner.app.shell.DangerDetector]. */
 data class DangerHit(
     val ruleId: String,
-    val label: String,
     val lineNumber: Int,
     val line: String,
     /** sha256(ruleId + trimmed line): approvals are tied to the exact line, not the script name. */
@@ -30,8 +29,8 @@ data class HistoryEntry(
     val durationMs: Long,
     val exitCode: Int?,
     val status: RunStatus,
-    /** "; "-separated labels of flagged commands, empty if none. */
-    val dangerLabels: String,
+    /** Comma-separated rule ids of flagged commands (shown as localized labels), empty if none. */
+    val dangerRules: String,
     /** Last few KB of output, for the audit trail. */
     val outputTail: String,
 )

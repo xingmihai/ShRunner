@@ -46,6 +46,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -76,22 +78,23 @@ fun ScriptsScreen(
     var renaming by remember { mutableStateOf<Script?>(null) }
     var deleting by remember { mutableStateOf<Script?>(null) }
 
-    LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it) } }
+    val genericError = stringResource(R.string.error_generic)
+    LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it ?: genericError) } }
     fun say(text: String) = scope.launch { snackbar.showSnackbar(text) }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.import(uri) { name -> say("Imported $name") }
+        if (uri != null) vm.import(uri) { name -> say(context.getString(R.string.imported, name)) }
     }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0), // the bottom bar + top bar already handle system insets
         topBar = {
             TopAppBar(
-                title = { Text(if (favoritesOnly) "Favorites" else "Scripts") },
+                title = { Text(stringResource(if (favoritesOnly) R.string.nav_favorites else R.string.nav_scripts)) },
                 actions = {
                     if (!favoritesOnly) {
                         IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                            Icon(Icons.Outlined.FileOpen, contentDescription = "Import script")
+                            Icon(Icons.Outlined.FileOpen, contentDescription = stringResource(R.string.cd_import))
                         }
                     }
                 },
@@ -100,7 +103,7 @@ fun ScriptsScreen(
         floatingActionButton = {
             if (!favoritesOnly) {
                 FloatingActionButton(onClick = { showCreate = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New script")
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.cd_new_script))
                 }
             }
         },
@@ -115,16 +118,16 @@ fun ScriptsScreen(
                     if (items.isEmpty()) {
                         if (favoritesOnly) {
                             EmptyState(
-                                Icons.Outlined.StarBorder, "No favorites yet",
-                                "Star a script and it shows up here and when you long-press the app icon.",
+                                Icons.Outlined.StarBorder, stringResource(R.string.favorites_empty_title),
+                                stringResource(R.string.favorites_empty_msg),
                             )
                         } else {
                             EmptyState(
-                                Icons.Outlined.Description, "No scripts yet",
-                                "Create a new script or import an existing .sh file.",
+                                Icons.Outlined.Description, stringResource(R.string.scripts_empty_title),
+                                stringResource(R.string.scripts_empty_msg),
                             ) {
-                                Button(onClick = { showCreate = true }) { Text("New script") }
-                                OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("Import .sh file") }
+                                Button(onClick = { showCreate = true }) { Text(stringResource(R.string.btn_new_script)) }
+                                OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text(stringResource(R.string.btn_import)) }
                             }
                         }
                     } else {
@@ -139,13 +142,13 @@ fun ScriptsScreen(
                                     onDelete = { deleting = script },
                                     onPin = {
                                         if (!Shortcuts.requestPin(context, script.name)) {
-                                            say("This launcher doesn't support pinned shortcuts.")
+                                            say(context.getString(R.string.pin_unsupported))
                                         }
                                     },
                                     onTile = {
                                         vm.setTileTarget(script.name)
                                         Shortcuts.requestAddTile(context)
-                                        say("Quick Settings tile will open ${script.name}. Add the ShRunner tile if you haven't yet.")
+                                        say(context.getString(R.string.tile_set, script.name))
                                     },
                                 )
                             }
@@ -158,7 +161,7 @@ fun ScriptsScreen(
 
     if (showCreate) {
         NameDialog(
-            title = "New script", initial = "", confirmLabel = "Create",
+            title = stringResource(R.string.dialog_new_title), initial = "", confirmLabel = stringResource(R.string.action_create),
             onDismiss = { showCreate = false },
             onConfirm = { name ->
                 showCreate = false
@@ -168,7 +171,7 @@ fun ScriptsScreen(
     }
     renaming?.let { script ->
         NameDialog(
-            title = "Rename script", initial = script.name, confirmLabel = "Rename",
+            title = stringResource(R.string.dialog_rename_title), initial = script.name, confirmLabel = stringResource(R.string.menu_rename),
             onDismiss = { renaming = null },
             onConfirm = { name ->
                 renaming = null
@@ -179,12 +182,12 @@ fun ScriptsScreen(
     deleting?.let { script ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            title = { Text("Delete ${script.name}?") },
-            text = { Text("This can't be undone. Past runs stay in History.") },
+            title = { Text(stringResource(R.string.delete_title, script.name)) },
+            text = { Text(stringResource(R.string.delete_msg)) },
             confirmButton = {
-                TextButton(onClick = { deleting = null; vm.delete(script.name) }) { Text("Delete") }
+                TextButton(onClick = { deleting = null; vm.delete(script.name) }) { Text(stringResource(R.string.action_delete)) }
             },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 }
@@ -209,21 +212,21 @@ private fun ScriptRow(
         supportingContent = { Text("${formatSize(script.sizeBytes)} · ${formatDate(context, script.lastModified)}") },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onRun) { Icon(Icons.Filled.PlayArrow, contentDescription = "Run ${script.name}") }
+                IconButton(onClick = onRun) { Icon(Icons.Filled.PlayArrow, contentDescription = stringResource(R.string.cd_run, script.name)) }
                 IconButton(onClick = onToggleFavorite) {
                     Icon(
                         if (script.favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                        contentDescription = if (script.favorite) "Remove from favorites" else "Add to favorites",
+                        contentDescription = stringResource(if (script.favorite) R.string.cd_unfavorite else R.string.cd_favorite),
                     )
                 }
                 Box {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More") }
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.cd_more)) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("Edit") }, onClick = { menu = false; onOpen() })
-                        DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
-                        DropdownMenuItem(text = { Text("Add to home screen") }, onClick = { menu = false; onPin() })
-                        DropdownMenuItem(text = { Text("Set as Quick Settings tile") }, onClick = { menu = false; onTile() })
-                        DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.menu_edit)) }, onClick = { menu = false; onOpen() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.menu_rename)) }, onClick = { menu = false; onRename() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.menu_pin)) }, onClick = { menu = false; onPin() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.menu_tile)) }, onClick = { menu = false; onTile() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.action_delete)) }, onClick = { menu = false; onDelete() })
                     }
                 }
             }
@@ -248,13 +251,13 @@ private fun NameDialog(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                label = { Text("File name") },
-                supportingText = { Text(".sh is added automatically") },
+                label = { Text(stringResource(R.string.label_file_name)) },
+                supportingText = { Text(stringResource(R.string.hint_sh_auto)) },
             )
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }

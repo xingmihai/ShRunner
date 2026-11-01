@@ -6,21 +6,6 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// CI 把签名信息写进 local.properties（KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD）
-// 这里只用 Kotlin 标准库解析，避免在 kts 脚本里引用 java.util.Properties（Kotlin DSL 解析不了）
-fun localProp(name: String): String? {
-    val f = rootProject.file("local.properties")
-    if (!f.exists()) return null
-    return f.readLines()
-        .firstOrNull { it.trimStart().startsWith("$name=") }
-        ?.substringAfter("=")
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-}
-
-fun signProp(name: String): String? =
-    (project.findProperty(name) as String?)?.takeIf { it.isNotBlank() } ?: localProp(name)
-
 android {
     namespace = "com.shrunner.app"
     compileSdk = 37
@@ -33,22 +18,8 @@ android {
         versionName = "0.1.0"
     }
 
-    signingConfigs {
-        val ksFile = signProp("KEYSTORE_FILE")
-        if (ksFile != null && file(ksFile).exists()) {
-            create("release") {
-                storeFile = file(ksFile)
-                storePassword = signProp("KEYSTORE_PASSWORD")
-                keyAlias = signProp("KEY_ALIAS")
-                keyPassword = signProp("KEY_PASSWORD")
-            }
-        }
-    }
-
     buildTypes {
         release {
-            // 有正式密钥就签名；没有则回落到 debug 密钥，保证 CI 产物可直接安装
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }

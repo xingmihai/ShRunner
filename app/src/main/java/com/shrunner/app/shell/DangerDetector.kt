@@ -15,38 +15,38 @@ object DangerDetector {
     private val pipeToShell = Regex("""\b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z)?sh\b""")
     private val forkBomb = Regex(""":\s*\(\s*\)\s*\{""")
 
-    private class Rule(val id: String, val label: String, val test: (tokens: List<String>, cmds: List<String>, line: String) -> Boolean)
+    private class Rule(val id: String, val test: (tokens: List<String>, cmds: List<String>, line: String) -> Boolean)
 
     private val rules = listOf(
-        Rule("rm-recursive", "Recursive delete (rm -r)") { tokens, cmds, _ ->
+        Rule("rm-recursive") { tokens, cmds, _ ->
             "rm" in cmds && tokens.any { tok ->
                 tok == "--recursive" || (tok.length > 1 && tok[0] == '-' && tok[1] != '-' && tok.any { c -> c == 'r' || c == 'R' })
             }
         },
-        Rule("find-delete", "find -delete") { tokens, cmds, _ -> "find" in cmds && "-delete" in tokens },
-        Rule("su", "Privilege escalation (su/sudo)") { _, cmds, _ -> cmds.any { it == "su" || it == "sudo" } },
-        Rule("mount", "Mounting / unmounting filesystems") { _, cmds, _ ->
+        Rule("find-delete") { tokens, cmds, _ -> "find" in cmds && "-delete" in tokens },
+        Rule("su") { _, cmds, _ -> cmds.any { it == "su" || it == "sudo" } },
+        Rule("mount") { _, cmds, _ ->
             cmds.any { it == "mount" || it == "umount" || it == "losetup" }
         },
-        Rule("raw-disk", "Raw disk / device write or format") { tokens, cmds, line ->
+        Rule("raw-disk") { tokens, cmds, line ->
             ("dd" in cmds && tokens.any { it.startsWith("of=") }) ||
                 cmds.any { it.startsWith("mkfs") || it in setOf("fdisk", "sfdisk", "parted", "wipefs", "blkdiscard", "shred") } ||
                 devRedirect.containsMatchIn(line)
         },
-        Rule("power", "Reboot or power off") { _, cmds, _ ->
+        Rule("power") { _, cmds, _ ->
             cmds.any { it in setOf("reboot", "shutdown", "poweroff", "halt") }
         },
-        Rule("pm", "Destructive package manager command") { tokens, cmds, _ ->
+        Rule("pm") { tokens, cmds, _ ->
             "pm" in cmds && tokens.any { it in setOf("uninstall", "clear", "disable", "disable-user", "hide", "suspend") }
         },
-        Rule("system-settings", "System property / settings / SELinux change") { tokens, cmds, _ ->
+        Rule("system-settings") { tokens, cmds, _ ->
             cmds.any { it in setOf("setprop", "resetprop", "setenforce") } || ("settings" in cmds && "put" in tokens)
         },
-        Rule("recursive-perms", "Recursive permission / ownership change") { tokens, cmds, _ ->
+        Rule("recursive-perms") { tokens, cmds, _ ->
             cmds.any { it in setOf("chmod", "chown", "chcon") } && tokens.any { it == "-R" || it == "--recursive" }
         },
-        Rule("pipe-to-shell", "Download and execute (curl | sh)") { _, _, line -> pipeToShell.containsMatchIn(line) },
-        Rule("fork-bomb", "Fork bomb pattern") { _, _, line -> forkBomb.containsMatchIn(line) },
+        Rule("pipe-to-shell") { _, _, line -> pipeToShell.containsMatchIn(line) },
+        Rule("fork-bomb") { _, _, line -> forkBomb.containsMatchIn(line) },
     )
 
     fun scan(script: String): List<DangerHit> {
@@ -58,7 +58,7 @@ object DangerDetector {
             val cmds = tokens.map { it.substringAfterLast('/') }
             for (rule in rules) {
                 if (rule.test(tokens, cmds, line)) {
-                    hits += DangerHit(rule.id, rule.label, index + 1, line, fingerprint(rule.id, line))
+                    hits += DangerHit(rule.id, index + 1, line, fingerprint(rule.id, line))
                 }
             }
         }

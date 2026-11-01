@@ -1,6 +1,11 @@
 package com.shrunner.app.ui
 
 import android.net.Uri
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.stringResource
+import com.shrunner.app.R
+import com.shrunner.app.ui.settings.SettingsScreen
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -28,12 +33,13 @@ import com.shrunner.app.ui.history.HistoryScreen
 import com.shrunner.app.ui.run.RunScreen
 import com.shrunner.app.ui.scripts.ScriptsScreen
 
-private data class Tab(val route: String, val label: String, val icon: ImageVector)
+private data class Tab(val route: String, @StringRes val label: Int, val icon: ImageVector)
 
 private val tabs = listOf(
-    Tab("scripts", "Scripts", Icons.Filled.Terminal),
-    Tab("favorites", "Favorites", Icons.Filled.Star),
-    Tab("history", "History", Icons.Filled.History),
+    Tab("scripts", R.string.nav_scripts, Icons.Filled.Terminal),
+    Tab("favorites", R.string.nav_favorites, Icons.Filled.Star),
+    Tab("history", R.string.nav_history, Icons.Filled.History),
+    Tab("settings", R.string.nav_settings, Icons.Filled.Settings),
 )
 
 @Composable
@@ -62,7 +68,7 @@ fun AppRoot(launchScript: String?, onLaunchConsumed: () -> Unit) {
                                 }
                             },
                             icon = { Icon(tab.icon, contentDescription = null) },
-                            label = { Text(tab.label) },
+                            label = { Text(stringResource(tab.label)) },
                         )
                     }
                 }
@@ -77,6 +83,7 @@ fun AppRoot(launchScript: String?, onLaunchConsumed: () -> Unit) {
                 ScriptsScreen(favoritesOnly = true, onOpen = ::openEditor, onRun = ::openRun)
             }
             composable("history") { HistoryScreen() }
+            composable("settings") { SettingsScreen() }
             composable("editor/{name}") {
                 EditorScreen(onBack = { nav.popBackStack() }, onRun = ::openRun)
             }

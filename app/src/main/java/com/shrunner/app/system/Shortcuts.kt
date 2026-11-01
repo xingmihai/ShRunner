@@ -14,6 +14,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.shrunner.app.MainActivity
 import com.shrunner.app.R
+import com.shrunner.app.i18n.LocaleHelper
 
 /**
  * Home-screen / launcher shortcuts and the Quick Settings tile.
@@ -55,7 +56,7 @@ object Shortcuts {
     private fun build(context: Context, id: String, scriptName: String): ShortcutInfoCompat =
         ShortcutInfoCompat.Builder(context, id)
             .setShortLabel(scriptName.removeSuffix(".sh"))
-            .setLongLabel("Run ${scriptName.removeSuffix(".sh")}")
+            .setLongLabel(LocaleHelper.localized(context).getString(R.string.cd_run, scriptName.removeSuffix(".sh")))
             .setIcon(icon(context))
             .setIntent(runIntent(context, scriptName))
             .build()

@@ -13,6 +13,15 @@ AndroidX/Hilt/KSP/Room pin, use Studio's version-catalog quick fix to bump it.
 - `system/` pinned/dynamic shortcuts and the Quick Settings tile
 - `ui/` Compose screens (Scripts, Favorites, History tabs; Editor and Run screens) + ViewModels (Hilt)
 
+## Settings (4th tab)
+- Theme: follow system / light / dark, plus optional Material You dynamic color (Android 12+).
+- Language: 简体中文 (default) or English. `values/` is Chinese, `values-en/` is English; the choice is applied in
+  `MainActivity.attachBaseContext` and the Activity is recreated on change. Add a language by adding a `values-xx/` folder
+  and an option in `SettingsScreen` (+ `SettingsStore`).
+- Settings live in SharedPreferences (`data/SettingsStore.kt`) so they are readable synchronously at startup (no theme flash).
+- History stores dangerous-command rule ids, not text, so old entries also follow the language setting.
+- If you installed an earlier build, clear its app data once: the history table's column was renamed.
+
 ## Security model
 - Scripts run with the app's own UID. No permissions are requested; add INTERNET or storage access yourself if needed.
 - First run of a flagged line asks for confirmation; approval is tied to a hash of that exact line, so edits re-prompt.

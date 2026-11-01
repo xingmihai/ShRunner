@@ -30,7 +30,7 @@ data class OutLine(val text: String, val isError: Boolean)
 
 sealed interface RunPhase {
     data object Loading : RunPhase
-    data class Error(val message: String) : RunPhase
+    data class Error(val message: String?) : RunPhase
     data object Ready : RunPhase
     data object Running : RunPhase
     data class Finished(val status: RunStatus, val exitCode: Int?) : RunPhase
@@ -70,7 +70,7 @@ class RunViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                RunPhase.Error(e.message ?: "Couldn't open the script.")
+                RunPhase.Error(e.message)
             }
         }
     }
@@ -106,7 +106,7 @@ class RunViewModel @Inject constructor(
                 HistoryEntry(
                     scriptName = name, startedAt = System.currentTimeMillis(), durationMs = 0,
                     exitCode = null, status = RunStatus.DECLINED,
-                    dangerLabels = labels(hits), outputTail = "",
+                    dangerRules = rules(hits), outputTail = "",
                 ),
             )
         }
@@ -120,7 +120,7 @@ class RunViewModel @Inject constructor(
 
     private fun start() {
         val text = snapshotText
-        val flaggedLabels = labels(allHits)
+        val flaggedRules = rules(allHits)
         lines = emptyList()
         phase = RunPhase.Running
         job = viewModelScope.launch {
@@ -167,7 +167,7 @@ class RunViewModel @Inject constructor(
                         HistoryEntry(
                             scriptName = name, startedAt = startedAt,
                             durationMs = System.currentTimeMillis() - startedAt,
-                            exitCode = exit, status = status, dangerLabels = flaggedLabels,
+                            exitCode = exit, status = status, dangerRules = flaggedRules,
                             outputTail = buffer.joinToString("\n") { it.text }.takeLast(TAIL_CHARS),
                         ),
                     )
@@ -177,7 +177,7 @@ class RunViewModel @Inject constructor(
         }
     }
 
-    private fun labels(hits: List<DangerHit>) = hits.map { it.label }.distinct().joinToString("; ")
+    private fun rules(hits: List<DangerHit>) = hits.map { it.ruleId }.distinct().joinToString(",")
 
     private companion object {
         const val MAX_LINES = 5_000

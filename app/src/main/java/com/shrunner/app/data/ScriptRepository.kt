@@ -3,6 +3,9 @@ package com.shrunner.app.data
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.annotation.StringRes
+import com.shrunner.app.R
+import com.shrunner.app.i18n.LocaleHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -37,26 +40,29 @@ class ScriptRepository @Inject constructor(
 
     private fun refresh() = refreshTick.update { it + 1 }
 
+    private fun str(@StringRes id: Int, vararg args: Any): String =
+        LocaleHelper.localized(context).getString(id, *args)
+
     /** Adds ".sh" if missing and validates. Throws [IllegalArgumentException] with a user-facing message. */
     fun normalizeName(raw: String): String {
         var n = raw.trim()
         if (!n.endsWith(".sh", ignoreCase = true)) n += ".sh"
-        require(!n.startsWith(".")) { "Name can't start with a dot." }
-        require(NAME_REGEX.matches(n)) { "Use letters, digits, space, dot, dash or underscore (max 64 characters)." }
+        require(!n.startsWith(".")) { str(R.string.err_name_dot) }
+        require(NAME_REGEX.matches(n)) { str(R.string.err_name_chars) }
         return n
     }
 
     /** Resolves a script name to a file inside [scriptsDir]; rejects anything that could escape it. */
     fun resolve(name: String): File {
-        require(NAME_REGEX.matches(name)) { "Invalid script name." }
+        require(NAME_REGEX.matches(name)) { str(R.string.err_invalid_name) }
         val f = File(scriptsDir, name)
-        require(f.canonicalFile.parentFile == scriptsDir.canonicalFile) { "Invalid script name." }
+        require(f.canonicalFile.parentFile == scriptsDir.canonicalFile) { str(R.string.err_invalid_name) }
         return f
     }
 
     suspend fun read(name: String): String = withContext(Dispatchers.IO) {
         val f = resolve(name)
-        if (!f.exists()) throw IOException("\"$name\" no longer exists.")
+        if (!f.exists()) throw IOException(str(R.string.err_gone, name))
         f.readText()
     }
 
@@ -68,7 +74,7 @@ class ScriptRepository @Inject constructor(
     suspend fun create(raw: String): String = withContext(Dispatchers.IO) {
         val name = normalizeName(raw)
         val f = resolve(name)
-        require(!f.exists()) { "A script named $name already exists." }
+        require(!f.exists()) { str(R.string.err_exists, name) }
         writeAtomic(f, "#!/system/bin/sh\n\n")
         refresh()
         name
@@ -79,7 +85,7 @@ class ScriptRepository @Inject constructor(
             .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { if (it.moveToFirst()) it.getString(0) else null }
             ?: "script.sh"
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open that file.")
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException(str(R.string.err_open))
         val text = input.use { s ->
             val out = ByteArrayOutputStream()
             val buf = ByteArray(8192)
@@ -88,12 +94,12 @@ class ScriptRepository @Inject constructor(
                 val n = s.read(buf)
                 if (n < 0) break
                 total += n
-                require(total <= MAX_IMPORT_BYTES) { "File is larger than 1 MB." }
+                require(total <= MAX_IMPORT_BYTES) { str(R.string.err_too_large) }
                 out.write(buf, 0, n)
             }
             out.toString(Charsets.UTF_8.name())
         }
-        require('\u0000' !in text) { "That doesn't look like a text script." }
+        require('\u0000' !in text) { str(R.string.err_not_text) }
         // Windows line endings and BOMs make /system/bin/sh fail with confusing errors.
         val clean = text.removePrefix("\uFEFF").replace("\r\n", "\n")
         val name = uniqueName(sanitize(display))
@@ -107,9 +113,9 @@ class ScriptRepository @Inject constructor(
         if (newName == old) return@withContext old
         val src = resolve(old)
         val dst = resolve(newName)
-        require(src.exists()) { "Script no longer exists." }
-        require(!dst.exists()) { "A script named $newName already exists." }
-        if (!src.renameTo(dst)) throw IOException("Couldn't rename the script.")
+        require(src.exists()) { str(R.string.err_script_missing) }
+        require(!dst.exists()) { str(R.string.err_exists, newName) }
+        if (!src.renameTo(dst)) throw IOException(str(R.string.err_rename))
         prefs.renameScript(old, newName)
         refresh()
         newName
@@ -117,7 +123,7 @@ class ScriptRepository @Inject constructor(
 
     suspend fun delete(name: String) = withContext(Dispatchers.IO) {
         val f = resolve(name)
-        if (f.exists() && !f.delete()) throw IOException("Couldn't delete $name.")
+        if (f.exists() && !f.delete()) throw IOException(str(R.string.err_delete, name))
         prefs.forgetScript(name)
         refresh()
     }
@@ -132,7 +138,7 @@ class ScriptRepository @Inject constructor(
         tmp.writeText(text)
         if (!tmp.renameTo(target)) {
             tmp.delete()
-            throw IOException("Couldn't save ${target.name}.")
+            throw IOException(str(R.string.err_save, target.name))
         }
     }
 
