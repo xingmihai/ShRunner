@@ -1,0 +1,32 @@
+== 编译错误 ==
+== What went wrong ==
+* What went wrong:
+Execution failed for task ':app:hiltJavaCompileRelease' (registered by plugin 'com.android.internal.application').
+> Compilation failed; see the compiler output below.
+  error: [Hilt] Provided Metadata instance has version 2.4.0, while maximum supported version is 2.3.0. To support newer versions, update the kotlin-metadata-jvm library.: java.lang.IllegalArgumentException: Provided Metadata instance has version 2.4.0, while maximum supported version is 2.3.0. To support newer versions, update the kotlin-metadata-jvm library.
+    	at kotlin.metadata.jvm.internal.JvmReadUtils.throwIfNotCompatible$kotlin_metadata_jvm(JvmReadUtils.kt:95)
+    	at kotlin.metadata.jvm.internal.JvmReadUtils.checkMetadataVersionForRead(JvmReadUtils.kt:84)
+    	at kotlin.metadata.jvm.internal.JvmReadUtils.readMetadataImpl$kotlin_metadata_jvm(JvmReadUtils.kt:46)
+    	at kotlin.metadata.jvm.KotlinClassMetadata$Companion.readStrict(KotlinClassMetadata.kt:398)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.kotlin.KmClassContainer$Companion.createFor(KotlinClassMetadataUtils.kt:184)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement.kotlinMetadata_delegate$lambda$0(JavacTypeElement.kt:57)
+    	at kotlin.SynchronizedLazyImpl.getValue(LazyJVM.kt:86)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement.getKotlinMetadata(JavacTypeElement.kt:57)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement.<init>(JavacTypeElement.kt:86)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement.<init>(JavacTypeElement.kt)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement$DefaultJavacTypeElement.<init>(JavacTypeElement.kt:265)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacTypeElement$Companion.create(JavacTypeElement.kt:285)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacProcessingEnv.typeElementStore$lambda$2(JavacProcessingEnv.kt:58)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.XTypeElementStore.wrapBackingType(XTypeElementStore.kt:44)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.XTypeElementStore.get(XTypeElementStore.kt:35)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacProcessingEnv.wrapTypeElement(JavacProcessingEnv.kt:165)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacType.typeElement_delegate$lambda$0(JavacType.kt:64)
+    	at kotlin.SynchronizedLazyImpl.getValue(LazyJVM.kt:86)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacType.getTypeElement(JavacType.kt:61)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.javac.JavacType.getTypeElement(JavacType.kt:38)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.XAnnotation.getTypeElement(XAnnotation.kt:54)
+    	at dagger.spi.internal.shaded.androidx.room3.compiler.processing.XAnnotation.getClassName(XAnnotation.kt:63)
+    	at dagger.hilt.android.processor.internal.androidentrypoint.AndroidEntryPointMetadata.lambda$hiltAnnotations$0(AndroidEntryPointMetadata.java:177)
+    	at java.base/java.util.stream.ReferencePipeline$2$1.accept(ReferencePipeline.java:178)
+    	at java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1625)
+    	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
