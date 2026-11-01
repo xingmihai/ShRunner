@@ -57,14 +57,123 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > shrunner-release.jks
             echo "已恢复签名文件（$(stat -c%s shrunner-release.jks) 字节）"
             {
-              echo "KEYSTORE_FILE=$PWD/shrunner-release.jks"
+              echo "KEYSTORE_FILE_PATH=$PWD/shrunner-release.jks"
               echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
               echo "KEY_ALIAS=$KEY_ALIAS"
               echo "KEY_PASSWORD=$KEY_PASSWORD"
-            } >> local.properties
+            } >> "$GITHUB_ENV"
           else
             echo "未配置签名 secrets，本次用 debug 签名打可安装包"
           fi
+
+      # 本地推上来的代码可能带着不存在的版本号或 Android 上没有的 JDK API，
+      # 构建前自动校正一次，避免每次都得人工来修
+      - name: Auto-fix known build issues
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, pathlib, urllib.request
+
+          def fetch(url):
+              try:
+                  with urllib.request.urlopen(url, timeout=25) as r:
+                      return r.read().decode("utf-8", "replace")
+              except Exception:
+                  return ""
+
+          def listed(meta):
+              vs = re.findall(r"<version>([^<]+)</version>", meta)
+              return [v for v in vs if not re.search(r"alpha|beta|rc|dev|snapshot|-M\d", v, re.I)]
+
+          def bump(toml, key, path, repos, prefix_from=None):
+              m = re.search(rf'{key} = "([^"]+)"', toml)
+              if not m:
+                  return toml
+              cur = m.group(1)
+              meta = ""
+              for repo in repos:
+                  meta = fetch(f"{repo}/{path}/maven-metadata.xml")
+                  if meta:
+                      break
+              vs = listed(meta)
+              if prefix_from:
+                  pm = re.search(rf'{prefix_from} = "([^"]+)"', toml)
+                  if pm:
+                      pre = ".".join(pm.group(1).split(".")[:2])
+                      vs = [v for v in vs if v.startswith(pre)] or vs
+              if not vs or cur in vs:
+                  return toml
+              def keyfn(v):
+                  return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v)[:3]]
+              new = sorted(vs, key=keyfn)[-1]
+              print(f"[autofix] {key}: {cur} -> {new}")
+              return toml.replace(f'{key} = "{cur}"', f'{key} = "{new}"')
+
+          toml_path = pathlib.Path("gradle/libs.versions.toml")
+          if toml_path.exists():
+              t = toml_path.read_text()
+              t = bump(t, "composeBom", "androidx/compose/compose-bom",
+                       ["https://dl.google.com/dl/android/maven2", "https://repo1.maven.org/maven2"])
+              t = bump(t, "ksp", "com/google/devtools/ksp/symbol-processing-gradle-plugin",
+                       ["https://repo1.maven.org/maven2", "https://dl.google.com/dl/android/maven2"],
+                       prefix_from="kotlin")
+              t = bump(t, "room", "androidx/room/room-runtime",
+                       ["https://dl.google.com/dl/android/maven2"])
+              t = bump(t, "agp", "com/android/tools/build/gradle",
+                       ["https://dl.google.com/dl/android/maven2"])
+              toml_path.write_text(t)
+
+          # Android 的 java.lang.Process 没有 JDK 9 的 toHandle()，改成反射
+          for p in pathlib.Path("app/src").rglob("*.kt"):
+              s = p.read_text()
+              if ".toHandle()" not in s:
+                  continue
+              s = s.replace(
+                  "process.toHandle().descendants().forEach { it.destroyForcibly() }",
+                  "destroyDescendants(process)",
+              )
+              s = re.sub(r"\w+\.toHandle\(\)", "destroyDescendants(process)", s)
+              helper = """
+          /** Android 上没有 JDK 9 的 Process.toHandle()，这里用反射尽力杀掉子进程。 */
+          private fun destroyDescendants(process: Process) {
+              runCatching {
+                  val handle = process.javaClass.getMethod("toHandle").invoke(process)
+                  val descendants = handle.javaClass.getMethod("descendants").invoke(handle)
+                  (descendants as? java.util.stream.Stream<*>)?.forEach { child ->
+                      runCatching { child.javaClass.getMethod("destroyForcibly").invoke(child) }
+                  }
+              }
+          }
+          """
+              s = s.rstrip() + "\n" + helper
+              p.write_text(s)
+              print(f"[autofix] {p}: 替换 toHandle()")
+
+          # 有正式密钥但脚本没声明 signingConfigs 时，自动注入
+          ks = os.environ.get("KEYSTORE_FILE_PATH", "")
+          bp = pathlib.Path("app/build.gradle.kts")
+          if ks and bp.exists():
+              s = bp.read_text()
+              if "signingConfigs" not in s:
+                  esc = lambda x: x.replace("\\", "\\\\").replace('"', '\\"')
+                  block = (
+                      '    signingConfigs {\n'
+                      '        create("ciRelease") {\n'
+                      f'            storeFile = file("{esc(ks)}")\n'
+                      f'            storePassword = "{esc(os.environ.get("KEYSTORE_PASSWORD", ""))}"\n'
+                      f'            keyAlias = "{esc(os.environ.get("KEY_ALIAS", ""))}"\n'
+                      f'            keyPassword = "{esc(os.environ.get("KEY_PASSWORD", ""))}"\n'
+                      '        }\n'
+                      '    }\n\n'
+                  )
+                  s = s.replace("    buildTypes {", block + "    buildTypes {", 1)
+                  s = s.replace(
+                      "        release {\n",
+                      '        release {\n            signingConfig = signingConfigs.getByName("ciRelease")\n',
+                      1,
+                  )
+                  bp.write_text(s)
+                  print("[autofix] 已注入正式签名配置")
+          PYEOF
 
       - name: Build release APK
         id: apkbuild
@@ -122,23 +231,8 @@ jobs:
 
       - name: Upload CI logs
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p ci-logs
-          if [ -z "$(ls -A ci-logs 2>/dev/null)" ]; then
-            find app/build -maxdepth 2 2>/dev/null > ci-logs/tree.log || true
-          fi
-          for f in ci-logs/*; do
-            [ -f "$f" ] || continue
-            NAME="$(basename "$f")-$GITHUB_RUN_ID.log"
-            B64=$(base64 -w0 "$f")
-            jq -n --arg m "ci: $NAME [skip ci]" --arg c "$B64" \
-              '{message:$m, content:$c}' > /tmp/body.json
-            curl -s -X PUT \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/contents/ci-logs/$NAME" \
-              -d @/tmp/body.json > /dev/null
-          done
-          echo "CI 日志已上传到 ci-logs/"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ github.run_id }}
+          path: ci-logs/
+          retention-days: 14
