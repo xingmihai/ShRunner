@@ -6,6 +6,15 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// CI 把签名信息写进 local.properties（KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD）
+val keystoreProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun keystoreProp(key: String): String? =
+    (project.findProperty(key) as String?)?.takeIf { it.isNotBlank() }
+        ?: keystoreProps.getProperty(key)?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.shrunner.app"
     compileSdk = 37
@@ -14,26 +23,25 @@ android {
         applicationId = "com.shrunner.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = (providers.gradleProperty("VERSION_CODE").orNull ?: "1").toInt()
-        versionName = providers.gradleProperty("VERSION_NAME").orNull ?: "0.1.0"
+        versionCode = 1
+        versionName = "0.1.0"
     }
 
     signingConfigs {
-        // CI 通过 -PKEYSTORE_PATH / -PKEYSTORE_PASSWORD / -PKEY_ALIAS / -PKEY_PASSWORD 注入
-        val ksPath = providers.gradleProperty("KEYSTORE_PATH").orNull
-        if (!ksPath.isNullOrBlank()) {
+        val ksFile = keystoreProp("KEYSTORE_FILE")
+        if (ksFile != null && file(ksFile).exists()) {
             create("release") {
-                storeFile = file(ksPath)
-                storePassword = providers.gradleProperty("KEYSTORE_PASSWORD").orNull
-                keyAlias = providers.gradleProperty("KEY_ALIAS").orNull
-                keyPassword = providers.gradleProperty("KEY_PASSWORD").orNull
+                storeFile = file(ksFile)
+                storePassword = keystoreProp("KEYSTORE_PASSWORD")
+                keyAlias = keystoreProp("KEY_ALIAS")
+                keyPassword = keystoreProp("KEY_PASSWORD")
             }
         }
     }
 
     buildTypes {
         release {
-            // 有正式密钥则用它签名，否则回落到 debug 密钥，保证 CI 产物可直接安装
+            // 有正式密钥就签名；没有则回落到 debug 密钥，保证 CI 产物可直接安装
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
