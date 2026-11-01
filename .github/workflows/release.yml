@@ -49,6 +49,23 @@ jobs:
       - name: Probe available versions
         run: |
           mkdir -p ci-logs
+          {
+            echo "== KSP 版本探测 =="
+            for repo in "https://repo1.maven.org/maven2" "https://dl.google.com/dl/android/maven2"; do
+              echo "--- $repo"
+              curl -sf -m 25 "$repo/com/google/devtools/ksp/symbol-processing-gradle-plugin/maven-metadata.xml" \
+                | grep -oP '(?<=<version>)[^<]+' | tail -15
+            done
+            echo "== Room 编译器探测 =="
+            curl -sf -m 25 "https://dl.google.com/dl/android/maven2/androidx/room/room-compiler/maven-metadata.xml" \
+              | grep -oP '(?<=<version>)[^<]+' | tail -5
+          } | tee ci-logs/versions.log
+          exit 1
+
+      - name: Probe available versions old
+        if: false
+        run: |
+          mkdir -p ci-logs
           ver() {
             local path="$1"
             for repo in "https://dl.google.com/dl/android/maven2" "https://repo1.maven.org/maven2"; do
